@@ -24,6 +24,7 @@ export type ProductVariant = {
   unit: string;
   quantity: number;
   actual_price?: string;
+  status?: number;
 };
 
 export type Category = {
@@ -43,6 +44,7 @@ export type Product = {
   price: number;
   attribute?: Record<string, ProductVariant>;
   image_url?: string;
+  status?: number;
 };
 
 type ProductImage = { type?: string; image_name?: string };
@@ -52,8 +54,22 @@ type ProductListResponse = {
   data?: Record<string, Product>;
   productImageData?: Record<string, ProductImage | ProductImage[]>;
   imageRootPath?: string;
+  totalNumberOFRecord?: number | string;
+  totalRecord?: number | string;
+  productimage?: Record<string, ProductImage | ProductImage[]>;
   message?: string;
 };
+
+export async function createAdminSession(username: string, password: string): Promise<void> {
+  const isWeb = Platform.OS === 'web';
+  const response = await fetch(isWeb ? '/api/admin-session' : 'https://crtup.in/accrabasket/admin/index', {
+    method: 'POST',
+    headers: isWeb ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: isWeb ? JSON.stringify({ username, password }) : new URLSearchParams({ username, password }).toString(),
+    credentials: 'include',
+  });
+  if (!response.ok) throw new Error('Unable to open the admin product session.');
+}
 
 export async function loginApi(username: string, password: string): Promise<LoginResponse> {
   const params = new URLSearchParams({ username, password });
@@ -83,7 +99,7 @@ export async function loginApi(username: string, password: string): Promise<Logi
   }
 }
 
-export async function getAllProducts(filters: { productName?: string; categoryId?: number | null } = {}): Promise<Product[]> {
+export async function getProductPage(filters: { productName?: string; categoryId?: number | null; categoryName?: string; page?: number; limit?: number } = {}): Promise<{ products: Product[]; total: number }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
 
@@ -91,11 +107,22 @@ export async function getAllProducts(filters: { productName?: string; categoryId
     const isWeb = Platform.OS === 'web';
     const params = new URLSearchParams({ product_name: filters.productName?.trim() || '' });
     if (filters.categoryId != null) params.set('category_id', String(filters.categoryId));
-    const response = await fetch(isWeb ? `/api/products?${params}` : 'https://crtup.in/productlist', {
+    if (filters.categoryName) params.set('category_name', filters.categoryName);
+    if (filters.categoryName) {
+      params.set('filter_type', 'Category_name');
+      params.set('value', filters.categoryName);
+    } else if (filters.productName?.trim()) {
+      params.set('filter_type', 'Product_name');
+      params.set('value', filters.productName.trim());
+    }
+    params.set('page', String(filters.page || 1));
+    params.set('limit', String(filters.limit || 10));
+    const response = await fetch(isWeb ? `/api/products?${params}` : 'https://crtup.in/accrabasket/admin/product/getProductList', {
       method: isWeb ? 'GET' : 'POST',
       headers: isWeb ? undefined : { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: isWeb ? undefined : params.toString(),
       signal: controller.signal,
+      credentials: 'include',
     });
     if (!response.ok) throw new Error(`The server returned an error (${response.status}).`);
 
@@ -103,14 +130,22 @@ export async function getAllProducts(filters: { productName?: string; categoryId
     if (result.status?.toLowerCase() !== 'success' || !result.data) {
       throw new Error(result.message || 'Products could not be loaded.');
     }
-    return Object.values(result.data).map((product) => {
-      const imageValue = result.productImageData?.[String(product.product_id)];
-      const image = Array.isArray(imageValue) ? imageValue[0] : imageValue;
+    const products = Object.values(result.data).map((rawProduct) => {
+      const raw = rawProduct as Product & { id?: number; atribute?: Array<{ id: number; name: string; quantity: number; unit: string; status?: number }> };
+      const productId = Number(raw.product_id || raw.id);
+      const normalizedAttributes = raw.attribute || Object.fromEntries((raw.atribute || []).map((item) => [String(item.id), {
+        id: Number(item.id), attribute_name: item.name, price: 0, stock: 0,
+        quantity: Number(item.quantity), unit: item.unit, status: Number(item.status ?? 1),
+      }]));
+      const imageMap = result.productImageData || result.productimage;
+      const imageValue = imageMap?.[String(productId)];
+      const image = Array.isArray(imageValue) ? imageValue.find((item) => item.type === 'product') || imageValue[0] : imageValue;
       const imageUrl = result.imageRootPath && image?.image_name
-        ? `${result.imageRootPath}/${image.type || 'product'}/${product.product_id}/${image.image_name}`
+        ? `${result.imageRootPath}/${image.type || 'product'}/${productId}/${image.image_name}`
         : undefined;
-      return { ...product, image_url: imageUrl };
+      return { ...raw, product_id: productId, attribute: normalizedAttributes, image_url: imageUrl };
     });
+    return { products, total: Number(result.totalRecord || result.totalNumberOFRecord || products.length) };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('Loading products took too long. Please try again.');

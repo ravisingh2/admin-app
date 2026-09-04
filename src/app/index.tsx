@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { loginApi } from '@/services/api';
+import { createAdminSession, loginApi } from '@/services/api';
 import { loginStyles as styles } from '@/styles/LoginStyles';
 
 export default function LoginScreen() {
@@ -26,7 +26,9 @@ export default function LoginScreen() {
         (typeof response.status === 'string' && response.status.toLowerCase() === 'success');
 
       if (isSuccessful) {
-        const displayName = response.data?.[0]?.first_name || cleanUsername;
+        const user = response.data?.[0];
+        await createAdminSession(user?.email || user?.username || cleanUsername, password);
+        const displayName = user?.first_name || cleanUsername;
         router.replace({ pathname: '/dashboard', params: { name: displayName } });
         return;
       }

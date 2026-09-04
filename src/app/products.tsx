@@ -1,10 +1,10 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Modal, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Category, getAllProducts, getCategories, Product, ProductVariant } from '@/services/api';
+import { Category, getCategories, getProductPage, Product, ProductVariant } from '@/services/api';
 
 const PAGE_SIZE = 10;
 
@@ -12,7 +12,7 @@ type ProductEntry = { product: Product; variant?: ProductVariant; rowKey: string
 
 function ProductRow({ entry, index, categoryNames }: { entry: ProductEntry; index: number; categoryNames: Record<number, string> }) {
   const { product, variant } = entry;
-  const stock = Number(variant?.stock || 0);
+  const isActive = Number(variant?.status ?? product.status ?? 1) === 1;
 
   return (
     <View style={styles.row}>
@@ -31,7 +31,7 @@ function ProductRow({ entry, index, categoryNames }: { entry: ProductEntry; inde
       <Text style={[styles.cell, styles.category]} numberOfLines={2}>{product.category_id ? categoryNames[Number(product.category_id)] || `Category ${product.category_id}` : '—'}</Text>
       <Text style={[styles.cell, styles.quantity]}>{variant?.quantity ?? '—'}</Text>
       <Text style={[styles.cell, styles.unit]} numberOfLines={1}>{variant?.unit || '—'}</Text>
-      <View style={styles.statusColumn}><View style={[styles.badge, stock <= 0 && styles.inactiveBadge]}><Text style={[styles.badgeText, stock <= 0 && styles.inactiveText]}>{stock > 0 ? 'Active' : 'Out of stock'}</Text></View></View>
+      <View style={styles.statusColumn}><View style={[styles.badge, !isActive && styles.inactiveBadge]}><Text style={[styles.badgeText, !isActive && styles.inactiveText]}>{isActive ? 'Active' : 'Inactive'}</Text></View></View>
       <View style={styles.actionColumn}><Pressable style={styles.editButton}><Text style={styles.editText}>Edit</Text></Pressable></View>
     </View>
   );
@@ -43,31 +43,69 @@ export default function ProductsScreen() {
   const [query, setQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [categoryOpen, setCategoryOpen] = useState(false);
-  const [page, setPage] = useState(1);
+  const [nextPage, setNextPage] = useState(2);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const loadingMoreRef = useRef(false);
+  const activeFilterRef = useRef('');
+  const scrollReadyRef = useRef(false);
+  const lastScrollYRef = useRef(0);
 
-  const load = useCallback(async (refresh = false) => {
-    refresh ? setRefreshing(true) : setLoading(true);
+  activeFilterRef.current = `${query.trim()}|${selectedCategory ?? 'all'}`;
+
+  const loadPage = useCallback(async (pageNumber: number, append: boolean, refresh = false) => {
+    if (append && loadingMoreRef.current) return;
+    const requestFilter = `${query.trim()}|${selectedCategory ?? 'all'}`;
+    if (append) loadingMoreRef.current = true;
+    if (refresh) setRefreshing(true);
+    else if (append) setLoadingMore(true);
+    else setLoading(true);
     setError('');
     try {
-      const productData = await getAllProducts({ productName: query, categoryId: selectedCategory });
-      setProducts(productData);
-      setPage(1);
+      const result = await getProductPage({
+        productName: query,
+        categoryId: selectedCategory,
+        categoryName: selectedCategory == null ? undefined : categoryList.find((category) => Number(category.id) === selectedCategory)?.category_name,
+        page: pageNumber,
+        limit: PAGE_SIZE,
+      });
+      if (activeFilterRef.current !== requestFilter) return;
+      setProducts((current) => {
+        const newProducts = append
+          ? result.products.filter((item) => !current.some((existing) => existing.product_id === item.product_id))
+          : result.products;
+        const combined = append ? [...current, ...newProducts] : newProducts;
+        const pageAddedProducts = !append || newProducts.length > 0;
+        setHasMore(pageAddedProducts && result.products.length >= PAGE_SIZE && combined.length < result.total);
+        return combined;
+      });
+      setNextPage(pageNumber + 1);
     }
     catch (err) { setError(err instanceof Error ? err.message : 'Products could not be loaded.'); }
-    finally { setLoading(false); setRefreshing(false); }
-  }, [query, selectedCategory]);
+    finally {
+      loadingMoreRef.current = false;
+      if (activeFilterRef.current === requestFilter) {
+        setLoading(false);
+        setRefreshing(false);
+        setLoadingMore(false);
+      }
+    }
+  }, [query, selectedCategory, categoryList]);
 
   useEffect(() => {
     getCategories().then(setCategoryList).catch(() => setCategoryList([]));
   }, []);
 
   useEffect(() => {
-    const debounce = setTimeout(() => { void load(); }, 400);
+    scrollReadyRef.current = false;
+    lastScrollYRef.current = 0;
+    setHasMore(true);
+    const debounce = setTimeout(() => { void loadPage(1, false); }, 400);
     return () => clearTimeout(debounce);
-  }, [load]);
+  }, [loadPage]);
 
   const entries = useMemo<ProductEntry[]>(() => products.flatMap((product) => {
     const variants = Object.values(product.attribute || {});
@@ -90,10 +128,16 @@ export default function ProductsScreen() {
       return matchesCategory && Boolean(matchesName);
     });
   }, [entries, query, selectedCategory]);
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const first = filtered.length ? (page - 1) * PAGE_SIZE + 1 : 0;
-  const last = Math.min(page * PAGE_SIZE, filtered.length);
+  const loadNextPage = () => {
+    if (!scrollReadyRef.current || !hasMore || loading || loadingMore || refreshing) return;
+    scrollReadyRef.current = false;
+    void loadPage(nextPage, true);
+  };
+
+  const noteUserScroll = (offsetY: number) => {
+    if (offsetY > lastScrollYRef.current + 4) scrollReadyRef.current = true;
+    lastScrollYRef.current = offsetY;
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -107,7 +151,7 @@ export default function ProductsScreen() {
         <View style={styles.panelTitleRow}><Text style={styles.panelTitle}>Product List</Text><Text style={styles.total}>{entries.length} variants</Text></View>
         <View style={styles.tools}>
           <Text style={styles.entries}>Show 10 entries</Text>
-          <View style={styles.searchBox}><Text style={styles.searchLabel}>Product name:</Text><TextInput value={query} onChangeText={(text) => { setQuery(text); setPage(1); }} style={styles.searchInput} placeholder="Search" placeholderTextColor="#AAA" autoCorrect={false} /></View>
+          <View style={styles.searchBox}><Text style={styles.searchLabel}>Product name:</Text><TextInput value={query} onChangeText={setQuery} style={styles.searchInput} placeholder="Search" placeholderTextColor="#AAA" autoCorrect={false} /></View>
         </View>
         <View style={styles.categoryFilter}>
           <Text style={styles.categoryLabel}>Filter by category</Text>
@@ -127,7 +171,7 @@ export default function ProductsScreen() {
                 renderItem={({ item }) => {
                   const categoryId = item.id === 0 ? null : item.id;
                   const active = selectedCategory === categoryId;
-                  return <Pressable onPress={() => { setSelectedCategory(categoryId); setPage(1); setCategoryOpen(false); }} style={[styles.categoryOption, active && styles.categoryOptionActive]}><Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>{item.category_name}</Text>{active && <Text style={styles.check}>✓</Text>}</Pressable>;
+                  return <Pressable onPress={() => { setSelectedCategory(categoryId); setCategoryOpen(false); }} style={[styles.categoryOption, active && styles.categoryOptionActive]}><Text style={[styles.categoryOptionText, active && styles.categoryOptionTextActive]}>{item.category_name}</Text>{active && <Text style={styles.check}>✓</Text>}</Pressable>;
                 }}
               />
             </Pressable>
@@ -135,16 +179,23 @@ export default function ProductsScreen() {
         </Modal>
 
         {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3C8DBC" /><Text style={styles.stateText}>Loading products…</Text></View>
-          : error ? <View style={styles.center}><Text style={styles.errorTitle}>Couldn’t load products</Text><Text style={styles.stateText}>{error}</Text><Pressable onPress={() => load()} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
+          : error && products.length === 0 ? <View style={styles.center}><Text style={styles.errorTitle}>Couldn’t load products</Text><Text style={styles.stateText}>{error}</Text><Pressable onPress={() => loadPage(1, false)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
           : <>
             <View style={styles.tableHeader}>
               <Text style={[styles.headerCell, styles.serial]}>#</Text><Text style={[styles.headerCell, styles.productColumn]}>Product</Text><Text style={[styles.headerCell, styles.category]}>Category</Text><Text style={[styles.headerCell, styles.quantity]}>Qty</Text><Text style={[styles.headerCell, styles.unit]}>Unit</Text><Text style={[styles.headerCell, styles.statusColumn]}>Status</Text><Text style={[styles.headerCell, styles.actionColumn]}>Action</Text>
             </View>
-            <FlatList data={pageItems} keyExtractor={(item) => item.rowKey} renderItem={({ item, index }) => <ProductRow entry={item} index={first + index} categoryNames={categoryNames} />} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} />} ListEmptyComponent={<View style={styles.center}><Text style={styles.stateText}>No matching products found.</Text></View>} />
-            <View style={styles.pagination}>
-              <Text style={styles.showing}>Showing {first} to {last} of {filtered.length} entries</Text>
-              <View style={styles.pageButtons}><Pressable disabled={page === 1} onPress={() => setPage((p) => p - 1)} style={[styles.pageButton, page === 1 && styles.disabled]}><Text style={styles.pageButtonText}>Previous</Text></Pressable><View style={styles.currentPage}><Text style={styles.currentPageText}>{page}</Text></View><Pressable disabled={page === pages} onPress={() => setPage((p) => p + 1)} style={[styles.pageButton, page === pages && styles.disabled]}><Text style={styles.pageButtonText}>Next</Text></Pressable></View>
-            </View>
+            <FlatList
+              data={filtered}
+              keyExtractor={(item) => item.rowKey}
+              renderItem={({ item, index }) => <ProductRow entry={item} index={index + 1} categoryNames={categoryNames} />}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { scrollReadyRef.current = false; void loadPage(1, false, true); }} />}
+              ListEmptyComponent={<View style={styles.center}><Text style={styles.stateText}>No matching products found.</Text></View>}
+              onScroll={(event) => noteUserScroll(event.nativeEvent.contentOffset.y)}
+              scrollEventThrottle={16}
+              onEndReached={loadNextPage}
+              onEndReachedThreshold={0.2}
+              ListFooterComponent={loadingMore ? <View style={styles.loadingMore}><ActivityIndicator color="#3C8DBC" /><Text style={styles.loadingMoreText}>Loading more products…</Text></View> : !hasMore && filtered.length > 0 ? <Text style={styles.endText}>All products loaded</Text> : null}
+            />
           </>}
       </View>
     </SafeAreaView>
@@ -168,5 +219,5 @@ const styles = StyleSheet.create({
   productCell: { flexDirection: 'row', alignItems: 'center' }, thumb: { width: 42, height: 42, borderRadius: 3, overflow: 'hidden', backgroundColor: '#E8F1F6', alignItems: 'center', justifyContent: 'center', marginRight: 8 }, productImage: { width: '100%', height: '100%' }, thumbText: { color: '#3C8DBC', fontWeight: '800' }, productCopy: { flex: 1 }, productName: { color: '#333', fontSize: 12, fontWeight: '700' }, productMeta: { color: '#999', fontSize: 9, marginTop: 3 },
   badge: { backgroundColor: '#DFF0D8', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 2 }, badgeText: { color: '#3C763D', fontSize: 8, fontWeight: '700' }, inactiveBadge: { backgroundColor: '#F2DEDE' }, inactiveText: { color: '#A94442' }, editButton: { backgroundColor: '#3C8DBC', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 2 }, editText: { color: '#FFF', fontSize: 9, fontWeight: '700' },
   center: { flex: 1, minHeight: 220, alignItems: 'center', justifyContent: 'center', padding: 25 }, stateText: { color: '#777', fontSize: 12, textAlign: 'center', marginTop: 9 }, errorTitle: { color: '#333', fontSize: 17, fontWeight: '700' }, retry: { marginTop: 15, backgroundColor: '#3C8DBC', paddingHorizontal: 18, paddingVertical: 9, borderRadius: 3 }, retryText: { color: '#FFF', fontWeight: '700' },
-  pagination: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderTopWidth: 1, borderTopColor: '#EEE' }, showing: { color: '#666', fontSize: 10 }, pageButtons: { flexDirection: 'row' }, pageButton: { borderWidth: 1, borderColor: '#DDD', paddingHorizontal: 9, paddingVertical: 7 }, pageButtonText: { color: '#555', fontSize: 9 }, currentPage: { backgroundColor: '#3C8DBC', paddingHorizontal: 10, justifyContent: 'center' }, currentPageText: { color: '#FFF', fontSize: 10 }, disabled: { opacity: 0.4 },
+  loadingMore: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 18 }, loadingMoreText: { color: '#667', fontSize: 11, marginLeft: 9 }, endText: { color: '#999', fontSize: 10, textAlign: 'center', paddingVertical: 17 },
 });
