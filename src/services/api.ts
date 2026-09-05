@@ -414,7 +414,7 @@ export async function getProductPage(filters: { productName?: string; categoryId
       : 'https://crtup.in/accrabasket/admin/product/getProductList';
     const merchantApiParameters = JSON.stringify({
       method: 'productlist',
-      all_product: 1,
+      all_product: 0,
       pagination: 1,
       page: filters.page || 1,
       merchant_id: merchantId,

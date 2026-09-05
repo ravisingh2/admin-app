@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       : 'https://crtup.in/accrabasket/admin/product/getProductList';
     const merchantParameters = JSON.stringify({
       method: 'productlist',
-      all_product: 1,
+      all_product: 0,
       pagination: 1,
       page: Number(requestUrl.searchParams.get('page') || 1),
       merchant_id: Number(requestUrl.searchParams.get('merchant_id') || 0),
