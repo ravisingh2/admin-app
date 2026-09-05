@@ -1,6 +1,7 @@
 export async function GET(request: Request) {
   try {
     const requestUrl = new URL(request.url);
+    const isMerchant = requestUrl.searchParams.get('role_id') === '2';
     const params = new URLSearchParams({
       product_name: requestUrl.searchParams.get('product_name') || '',
     });
@@ -20,17 +21,32 @@ export async function GET(request: Request) {
 
     const cookieHeader = request.headers.get('cookie') || '';
     const sessionMatch = cookieHeader.match(/(?:^|;\s*)accrabasket_admin=([^;]+)/);
-    if (!sessionMatch) return Response.json({ status: 'error', message: 'Admin session required.' }, { status: 401 });
-    const upstreamCookie = decodeURIComponent(sessionMatch[1]);
+    if (!isMerchant && !sessionMatch) return Response.json({ status: 'error', message: 'Admin session required.' }, { status: 401 });
+    const upstreamCookie = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
 
-    const upstream = await fetch('https://crtup.in/accrabasket/admin/product/getProductList', {
+    const productUrl = isMerchant
+      ? 'https://crtup.in/basketapi/index.php/application/product'
+      : 'https://crtup.in/accrabasket/admin/product/getProductList';
+    const merchantParameters = JSON.stringify({
+      method: 'productlist',
+      all_product: 1,
+      pagination: 1,
+      page: Number(requestUrl.searchParams.get('page') || 1),
+      merchant_id: Number(requestUrl.searchParams.get('merchant_id') || 0),
+      ...(productName ? { product_name: productName } : {}),
+      ...(categoryId ? { category_id: Number(categoryId) } : {}),
+    });
+    const upstreamBody = isMerchant
+      ? new URLSearchParams({ parameters: merchantParameters, rqid: '' }).toString()
+      : params.toString();
+    const upstream = await fetch(productUrl, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
-        Cookie: upstreamCookie,
+        ...(isMerchant ? {} : { Cookie: upstreamCookie }),
       },
-      body: params.toString(),
+      body: upstreamBody,
     });
     const body = await upstream.text();
     return new Response(body, {

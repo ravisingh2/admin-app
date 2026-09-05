@@ -2,9 +2,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { setAuthenticated } from '@/services/api';
+
 const actions = [
   { icon: '▦', title: 'Browse products', caption: 'Explore the latest items', color: '#E4F3E8', route: '/products' as const },
-  { icon: '⌁', title: 'My orders', caption: 'Track current deliveries', color: '#FFF1DA' },
+  { icon: '⌁', title: 'Manage orders', caption: 'View and update merchant orders', color: '#FFF1DA', route: '/orders' as const },
   { icon: '♡', title: 'Saved items', caption: 'Return to your favourites', color: '#F6EAF1' },
   { icon: '◉', title: 'My account', caption: 'Details and preferences', color: '#E8EFF8' },
 ];
@@ -12,6 +14,7 @@ const actions = [
 export default function HomeScreen() {
   const { name } = useLocalSearchParams<{ name?: string }>();
   const displayName = typeof name === 'string' && name ? name : 'there';
+  const signOut = () => { setAuthenticated(false); router.replace('/'); };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -21,7 +24,7 @@ export default function HomeScreen() {
             <Text style={styles.eyebrow}>ACCRABASKET</Text>
             <Text style={styles.greeting}>Hello, {displayName}</Text>
           </View>
-          <Pressable accessibilityLabel="Sign out" onPress={() => router.replace('/')} style={styles.avatar}>
+          <Pressable accessibilityLabel="Sign out" onPress={signOut} style={styles.avatar}>
             <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
           </Pressable>
         </View>
@@ -32,7 +35,7 @@ export default function HomeScreen() {
         </View>
         <View style={styles.grid}>
           {actions.map((action) => (
-            <Pressable key={action.title} onPress={() => action.route && router.push(action.route)} style={({ pressed }) => [styles.actionCard, pressed && styles.pressed]}>
+            <Pressable key={action.title} onPress={() => { if (action.route) router.navigate(action.route); }} style={({ pressed }) => [styles.actionCard, pressed && styles.pressed]}>
               <View style={[styles.actionIcon, { backgroundColor: action.color }]}><Text style={styles.actionIconText}>{action.icon}</Text></View>
               <Text style={styles.actionTitle}>{action.title}</Text>
               <Text style={styles.actionCaption}>{action.caption}</Text>
@@ -45,7 +48,7 @@ export default function HomeScreen() {
           <View style={styles.emptyCopy}><Text style={styles.emptyTitle}>You’re all caught up</Text><Text style={styles.emptyText}>Your recent activity and order updates will appear here.</Text></View>
         </View>
 
-        <Pressable onPress={() => router.replace('/')} style={styles.signOut}><Text style={styles.signOutText}>Sign out</Text></Pressable>
+        <Pressable onPress={signOut} style={styles.signOut}><Text style={styles.signOutText}>Sign out</Text></Pressable>
       </ScrollView>
     </SafeAreaView>
   );

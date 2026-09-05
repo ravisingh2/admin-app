@@ -1,10 +1,10 @@
 import md5 from 'crypto-js/md5';
-import { router } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { createAdminSession, loginApi } from '@/services/api';
+import { createAdminSession, isAuthenticated, loginApi, setAuthenticated, setAuthenticatedRoleId, setAuthenticatedUserId } from '@/services/api';
 import { loginStyles as styles } from '@/styles/LoginStyles';
 
 export default function LoginScreen() {
@@ -27,7 +27,16 @@ export default function LoginScreen() {
 
       if (isSuccessful) {
         const user = response.data?.[0];
-        await createAdminSession(user?.email || user?.username || cleanUsername, password);
+        const roleId = Number(
+          user?.role_id ?? user?.roleid ?? user?.roleId ?? user?.user_role_id ?? user?.role ??
+          (user?.id != null ? response.userRoleList?.[String(user.id)]?.[0] : undefined) ?? 0
+        );
+        setAuthenticatedRoleId(roleId);
+        setAuthenticatedUserId(Number(user?.id || 0));
+        if (roleId !== 2) {
+          await createAdminSession(user?.email || user?.username || cleanUsername, password, roleId);
+        }
+        setAuthenticated(true);
         const displayName = user?.first_name || cleanUsername;
         router.replace({ pathname: '/dashboard', params: { name: displayName } });
         return;
@@ -39,6 +48,8 @@ export default function LoginScreen() {
       setLoading(false);
     }
   };
+
+  if (isAuthenticated()) return <Redirect href="/dashboard" />;
 
   return (
     <SafeAreaView style={styles.safeArea}>

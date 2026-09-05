@@ -1,11 +1,12 @@
-const ADMIN_LOGIN_URL = 'https://crtup.in/accrabasket/admin/index';
-
 export async function POST(request: Request) {
   try {
-    const { username, password } = await request.json() as { username?: string; password?: string };
+    const { username, password, roleId } = await request.json() as { username?: string; password?: string; roleId?: number };
     if (!username || !password) return Response.json({ message: 'Credentials required.' }, { status: 400 });
 
-    const upstream = await fetch(ADMIN_LOGIN_URL, {
+    const loginUrl = Number(roleId) === 2
+      ? 'https://crtup.in/accrabasket/merchant/index'
+      : 'https://crtup.in/accrabasket/admin/index';
+    const upstream = await fetch(loginUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ username, password }).toString(),
@@ -15,7 +16,7 @@ export async function POST(request: Request) {
     const upstreamCookie = setCookie?.split(';')[0];
     const location = upstream.headers.get('location') || '';
     if (!upstreamCookie || location.includes('/login')) {
-      return Response.json({ message: 'Admin login failed.' }, { status: 401 });
+      return Response.json({ message: 'Product portal login failed.' }, { status: 401 });
     }
 
     return Response.json({ status: 'success' }, {
