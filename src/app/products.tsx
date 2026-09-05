@@ -24,9 +24,9 @@ function ProductRow({ entry, index, categoryNames, onEdit, onMapMerchant, mapped
   );
 
   return (
-    <View style={styles.row}>
-      {!merchant && <Text style={[styles.cell, styles.serial]}>{index}</Text>}
-      <View style={[styles.productCell, styles.productColumn]}>
+    <View style={styles.adminProductCard}>
+      <Text style={styles.adminSerial}>{index}</Text>
+      <View style={styles.adminProductMain}>
         <View style={styles.thumb}>
           {product.image_url
             ? <Image source={{ uri: product.image_url }} style={styles.productImage} contentFit="cover" transition={150} />
@@ -34,14 +34,12 @@ function ProductRow({ entry, index, categoryNames, onEdit, onMapMerchant, mapped
         </View>
         <View style={styles.productCopy}>
           <Text style={styles.productName} numberOfLines={1}>{product.product_name}</Text>
-          <Text style={styles.productMeta} numberOfLines={1}>{merchant ? variant?.attribute_name || product.brand_name || '—' : product.brand_name || variant?.attribute_name || '—'}</Text>
+          <Text style={styles.productMeta} numberOfLines={1}>{variant?.attribute_name || product.brand_name || '—'}</Text>
+          <Text style={styles.adminMeta} numberOfLines={1}>{variant?.quantity ?? '—'} {variant?.unit || ''}  ·  {product.category_id ? categoryNames[Number(product.category_id)] || `Category ${product.category_id}` : 'Uncategorised'}</Text>
         </View>
       </View>
-      <Text style={[styles.cell, styles.category]} numberOfLines={2}>{product.category_id ? categoryNames[Number(product.category_id)] || `Category ${product.category_id}` : '—'}</Text>
-      {merchant
-        ? <><Text style={[styles.cell, styles.price]}>{variant?.actual_price || (variant ? variant.price : product.price) || '—'}</Text><Text style={[styles.cell, styles.stock]}>{variant?.stock ?? '—'}</Text></>
-        : <><Text style={[styles.cell, styles.quantity]}>{variant?.quantity ?? '—'}</Text><Text style={[styles.cell, styles.unit]} numberOfLines={1}>{variant?.unit || '—'}</Text><View style={styles.statusColumn}><View style={[styles.badge, !isActive && styles.inactiveBadge]}><Text style={[styles.badgeText, !isActive && styles.inactiveText]}>{isActive ? 'Active' : 'Inactive'}</Text></View></View></>}
-      <View style={merchant ? styles.merchantAction : styles.actionColumn}>{!merchant && <Pressable onPress={() => onMapMerchant(product)} style={styles.mapButton}><Text style={styles.mapButtonText}>Map{mappedCount ? ` ${mappedCount}` : ''}</Text></Pressable>}<Pressable onPress={() => onEdit(product, variant)} style={styles.editButton}><Text style={styles.editText}>{merchant ? 'Manage Inventory' : 'Edit'}</Text></Pressable></View>
+      <View style={[styles.badge, !isActive && styles.inactiveBadge]}><Text style={[styles.badgeText, !isActive && styles.inactiveText]}>{isActive ? 'Active' : 'Inactive'}</Text></View>
+      <View style={styles.adminActions}><Pressable onPress={() => onMapMerchant(product)} style={styles.mapButton}><Text style={styles.mapButtonText}>Map{mappedCount ? ` (${mappedCount})` : ''}</Text></Pressable><Pressable onPress={() => onEdit(product, variant)} style={styles.editButton}><Text style={styles.editText}>Edit</Text></Pressable></View>
     </View>
   );
 }
@@ -256,7 +254,7 @@ export default function ProductsScreen() {
         {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3C8DBC" /><Text style={styles.stateText}>Loading products…</Text></View>
           : error && products.length === 0 ? <View style={styles.center}><Text style={styles.errorTitle}>Couldn’t load products</Text><Text style={styles.stateText}>{error}</Text><Pressable onPress={() => loadPage(1, false)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
           : <>
-            {!isMerchant && <View style={styles.tableHeader}>
+            {!isMerchant && false && <View style={styles.tableHeader}>
               {!isMerchant && <Text style={[styles.headerCell, styles.serial]}>#</Text>}<Text style={[styles.headerCell, styles.productColumn]}>Product / Attribute</Text><Text style={[styles.headerCell, styles.category]}>Category</Text>{isMerchant ? <><Text style={[styles.headerCell, styles.price]}>Price</Text><Text style={[styles.headerCell, styles.stock]}>Stock</Text></> : <><Text style={[styles.headerCell, styles.quantity]}>Qty</Text><Text style={[styles.headerCell, styles.unit]}>Unit</Text><Text style={[styles.headerCell, styles.statusColumn]}>Status</Text></>}<Text style={[styles.headerCell, isMerchant ? styles.merchantAction : styles.actionColumn]}>Action</Text>
             </View>}
             <FlatList
@@ -300,6 +298,7 @@ const styles = StyleSheet.create({
   tools: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10 }, entries: { fontSize: 11, color: '#555' }, searchBox: { flexDirection: 'row', alignItems: 'center' }, searchLabel: { color: '#555', fontSize: 11, marginRight: 6 }, searchInput: { width: 120, height: 34, borderWidth: 1, borderColor: '#D2D6DE', paddingHorizontal: 8, fontSize: 12, color: '#333' },
   merchantTools: { gap: 8, paddingVertical: 8 }, merchantSearch: { flex: 1 }, merchantSearchInput: { width: '100%', height: 40 }, merchantCategorySelect: { flex: 1, marginBottom: 0 },
   merchantList: { paddingHorizontal: 8, paddingBottom: 18 }, merchantCard: { minHeight: 92, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 12, padding: 10, marginBottom: 9, borderWidth: 1, borderColor: '#E3EBE6', shadowColor: '#173D2D', shadowOpacity: 0.08, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, merchantImageWrap: { width: 60, height: 60, borderRadius: 10, overflow: 'hidden', backgroundColor: '#E8F4EC', alignItems: 'center', justifyContent: 'center', marginRight: 10 }, merchantImageText: { color: '#176B45', fontSize: 20, fontWeight: '900' }, merchantCopy: { flex: 1, minWidth: 80 }, merchantProductName: { color: '#173D2D', fontSize: 14, fontWeight: '800' }, merchantAttribute: { color: '#557065', fontSize: 11, fontWeight: '600', marginTop: 3 }, merchantCategory: { color: '#94A29B', fontSize: 9, marginTop: 4 }, merchantNumbers: { gap: 5, marginHorizontal: 7 }, pricePill: { minWidth: 55, backgroundColor: '#E9F6EE', borderRadius: 7, paddingHorizontal: 7, paddingVertical: 5, alignItems: 'center' }, stockPill: { minWidth: 55, backgroundColor: '#EAF4FA', borderRadius: 7, paddingHorizontal: 7, paddingVertical: 5, alignItems: 'center' }, stockPillEmpty: { backgroundColor: '#FCEBEC' }, pillLabel: { color: '#8A9A92', fontSize: 7, fontWeight: '900' }, priceValue: { color: '#13824F', fontSize: 12, fontWeight: '900', marginTop: 1 }, stockValue: { color: '#247BA5', fontSize: 12, fontWeight: '900', marginTop: 1 }, stockValueEmpty: { color: '#C94A51' }, manageButton: { height: 38, flexDirection: 'row', alignItems: 'center', backgroundColor: '#176B45', borderRadius: 9, paddingHorizontal: 9 }, pressedButton: { opacity: 0.75 }, manageButtonText: { color: '#FFF', fontSize: 10, fontWeight: '800' }, manageArrow: { color: '#FFF', fontSize: 18, marginLeft: 3 },
+  adminProductCard: { minHeight: 78, flexDirection: 'row', alignItems: 'center', marginHorizontal: 8, marginBottom: 8, padding: 9, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E1E9E4', borderRadius: 10 }, adminSerial: { width: 22, color: '#9AA69F', fontSize: 9, textAlign: 'center' }, adminProductMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' }, adminMeta: { color: '#7D8C84', fontSize: 9, marginTop: 3 }, adminActions: { width: 58, gap: 5, marginLeft: 6 },
   categoryFilter: { paddingHorizontal: 12, paddingBottom: 12 }, categoryLabel: { color: '#555', fontSize: 11, fontWeight: '600', marginBottom: 6 }, categorySelect: { height: 40, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D2D6DE', borderRadius: 3, backgroundColor: '#FFF', paddingHorizontal: 12 }, categorySelectText: { flex: 1, color: '#333', fontSize: 12 }, categoryArrow: { color: '#777', fontSize: 18 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.38)', justifyContent: 'center', padding: 24 }, categoryModal: { width: '100%', maxWidth: 430, maxHeight: '72%', alignSelf: 'center', backgroundColor: '#FFF', borderRadius: 6, paddingVertical: 8 }, modalTitle: { color: '#333', fontSize: 17, fontWeight: '700', paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#EEE' }, categoryOption: { minHeight: 46, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#F3F3F3' }, categoryOptionActive: { backgroundColor: '#EAF4F9' }, categoryOptionText: { flex: 1, color: '#444', fontSize: 13 }, categoryOptionTextActive: { color: '#247BA5', fontWeight: '700' }, check: { color: '#3C8DBC', fontSize: 15, fontWeight: '800' },
   tableHeader: { minHeight: 39, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8F8F8', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#DDD', paddingHorizontal: 7 }, headerCell: { fontSize: 10, fontWeight: '800', color: '#444', textTransform: 'uppercase' },
