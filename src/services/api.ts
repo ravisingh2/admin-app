@@ -522,9 +522,12 @@ export async function saveProduct(product: EditableProduct): Promise<void> {
   }
 
   const response = await fetch(isWeb ? '/api/product-save' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
-    method: 'POST', headers, body, credentials: 'include', redirect: 'manual',
+    method: 'POST', headers, body, credentials: 'include', redirect: 'follow',
   });
-  if (!response.ok) {
+  // The legacy save endpoint persists the update and then redirects back to its
+  // HTML product page. Native fetch may therefore receive a redirect/final HTML
+  // response instead of JSON; only an actual 4xx/5xx response is a save failure.
+  if (response.status >= 400) {
     const result = await response.json().catch(() => ({})) as { message?: string };
     throw new Error(result.message || 'Product could not be saved.');
   }
