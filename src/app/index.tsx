@@ -53,8 +53,8 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
           <View style={styles.decorOne} /><View style={styles.decorTwo} />
           <View style={styles.brandBlock}>
             <View style={styles.logo}><Text style={styles.logoLeaf}>✦</Text><Text style={styles.logoBasket}>▰</Text></View>
