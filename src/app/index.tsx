@@ -58,7 +58,7 @@ export default function LoginScreen() {
           <View style={styles.decorOne} /><View style={styles.decorTwo} />
           <View style={styles.brandBlock}>
             <View style={styles.logo}><Text style={styles.logoLeaf}>✦</Text><Text style={styles.logoBasket}>▰</Text></View>
-            <Text style={styles.brand}>AccraBasket</Text>
+            <Text style={styles.brand}>CRTUP</Text>
             <Text style={styles.tagline}>Fresh choices. Simple shopping.</Text>
           </View>
           <View style={styles.card}>

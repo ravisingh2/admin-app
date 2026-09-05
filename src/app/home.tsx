@@ -21,7 +21,7 @@ export default function HomeScreen() {
       <ScrollView contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.eyebrow}>ACCRABASKET</Text>
+            <Text style={styles.eyebrow}>CRTUP</Text>
             <Text style={styles.greeting}>Hello, {displayName}</Text>
           </View>
           <Pressable accessibilityLabel="Sign out" onPress={signOut} style={styles.avatar}>
