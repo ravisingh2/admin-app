@@ -2,6 +2,8 @@ export async function GET(request: Request) {
   try {
     const requestUrl = new URL(request.url);
     const isMerchant = requestUrl.searchParams.get('role_id') === '2';
+    const source = requestUrl.searchParams.get('source');
+    const isInventory = isMerchant && source === 'inventory';
     const params = new URLSearchParams({
       product_name: requestUrl.searchParams.get('product_name') || '',
     });
@@ -21,22 +23,24 @@ export async function GET(request: Request) {
 
     const cookieHeader = request.headers.get('cookie') || '';
     const sessionMatch = cookieHeader.match(/(?:^|;\s*)accrabasket_admin=([^;]+)/);
-    if (!isMerchant && !sessionMatch) return Response.json({ status: 'error', message: 'Admin session required.' }, { status: 401 });
+    if (!isInventory && !sessionMatch) return Response.json({ status: 'error', message: 'Product portal session required.' }, { status: 401 });
     const upstreamCookie = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
 
-    const productUrl = isMerchant
+    const productUrl = isInventory
       ? 'https://crtup.in/basketapi/index.php/application/product'
+      : isMerchant
+        ? 'https://crtup.in/accrabasket/merchant/product/getproductlist'
       : 'https://crtup.in/accrabasket/admin/product/getProductList';
     const merchantParameters = JSON.stringify({
       method: 'productlist',
-      all_product: 0,
-      pagination: 1,
-      page: Number(requestUrl.searchParams.get('page') || 1),
+      all_product: 1,
+      pagination: 0,
+      page: 1,
       merchant_id: Number(requestUrl.searchParams.get('merchant_id') || 0),
       ...(productName ? { product_name: productName } : {}),
       ...(categoryId ? { category_id: Number(categoryId) } : {}),
     });
-    const upstreamBody = isMerchant
+    const upstreamBody = isInventory
       ? new URLSearchParams({ parameters: merchantParameters, rqid: '' }).toString()
       : params.toString();
     const upstream = await fetch(productUrl, {
@@ -44,10 +48,14 @@ export async function GET(request: Request) {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
-        ...(isMerchant ? {} : { Cookie: upstreamCookie }),
+        ...(!isInventory ? { Cookie: upstreamCookie } : {}),
       },
       body: upstreamBody,
+      redirect: 'manual',
     });
+    if (!isInventory && (upstream.status === 401 || (upstream.status >= 300 && upstream.status < 400))) {
+      return Response.json({ status: 'error', message: 'Your product session has expired. Please sign in again.' }, { status: 401 });
+    }
     const body = await upstream.text();
     return new Response(body, {
       status: upstream.status,

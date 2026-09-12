@@ -3,9 +3,8 @@ export async function POST(request: Request) {
     const { username, password, roleId } = await request.json() as { username?: string; password?: string; roleId?: number };
     if (!username || !password) return Response.json({ message: 'Credentials required.' }, { status: 400 });
 
-    const loginUrl = Number(roleId) === 2
-      ? 'https://crtup.in/accrabasket/merchant/index'
-      : 'https://crtup.in/accrabasket/admin/index';
+    // The shared portal login establishes the session and routes by user role.
+    const loginUrl = 'https://crtup.in/accrabasket/admin/index';
     const upstream = await fetch(loginUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -15,7 +14,7 @@ export async function POST(request: Request) {
     const setCookie = upstream.headers.get('set-cookie');
     const upstreamCookie = setCookie?.split(';')[0];
     const location = upstream.headers.get('location') || '';
-    if (!upstreamCookie || location.includes('/login')) {
+    if (!upstreamCookie || upstream.status < 300 || upstream.status >= 400 || !location || location.includes('/login')) {
       return Response.json({ message: 'Product portal login failed.' }, { status: 401 });
     }
 
@@ -28,4 +27,11 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ message: 'Unable to connect to the admin service.' }, { status: 502 });
   }
+}
+
+export async function DELETE() {
+  return Response.json({ status: 'success' }, { headers: {
+    'Set-Cookie': 'accrabasket_admin=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+    'Cache-Control': 'no-store',
+  } });
 }

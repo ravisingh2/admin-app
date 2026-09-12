@@ -1,3 +1,5 @@
+import { assertProductCreated } from '../../services/product-form';
+
 type EditableProduct = {
   id: number; product_name: string; category_id: number; item_code: string;
   product_desc: string; nutrition: string; brand_name: string; status: number;
@@ -8,7 +10,21 @@ type EditableProduct = {
 
 export async function POST(request: Request) {
   try {
-    const product = await request.json() as EditableProduct;
+    let product: EditableProduct;
+    let image: File | undefined;
+    if ((request.headers.get('content-type') || '').includes('multipart/form-data')) {
+      const incoming = await request.formData() as unknown as FormData;
+      const details = incoming.get('product');
+      if (typeof details !== 'string') return Response.json({ message: 'Product details are required.' }, { status: 400 });
+      product = JSON.parse(details) as EditableProduct;
+      const images = incoming.getAll('product_img[]');
+      if (images.length !== 1 || typeof images[0] === 'string' || !images[0].type.startsWith('image/') || images[0].size === 0) {
+        return Response.json({ message: 'Choose one valid product image.' }, { status: 400 });
+      }
+      image = images[0];
+    } else {
+      product = await request.json() as EditableProduct;
+    }
     if (!product.id || !product.product_name || !product.category_id) {
       return Response.json({ message: 'Product name and category are required.' }, { status: 400 });
     }
@@ -43,6 +59,7 @@ export async function POST(request: Request) {
       form.append('attribute_discount_type[]', attribute.discount_type || '');
       form.append('attribute_discount_value[]', attribute.discount_value || '');
     });
+    if (image) form.append('product_img[]', image, image.name);
 
     const upstream = await fetch('https://crtup.in/accrabasket/admin/product/saveproduct', {
       method: 'POST',
@@ -50,9 +67,10 @@ export async function POST(request: Request) {
       body: form,
       redirect: 'manual',
     });
-    if (upstream.status >= 400) return Response.json({ message: 'AccraBasket rejected the update.' }, { status: upstream.status });
+    await assertProductCreated(upstream);
     return Response.json({ status: 'success' });
-  } catch {
-    return Response.json({ message: 'Unable to save the product.' }, { status: 502 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to save the product.';
+    return Response.json({ message }, { status: /session.*expired/i.test(message) ? 401 : 502 });
   }
 }

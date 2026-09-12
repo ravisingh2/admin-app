@@ -1,10 +1,12 @@
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Category, EditableProduct, getCategories, getProductListFilters, getSelectedProduct, saveProduct } from '@/services/api';
+import type { ProductPhoto } from '@/services/product-form';
 
 const UNIT_OPTIONS = [
   { value: 'grams', label: 'Grams' }, { value: 'liter', label: 'Liter' },
@@ -33,6 +35,10 @@ export default function EditProductScreen() {
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [unitAttributeIndex, setUnitAttributeIndex] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [replacementImage, setReplacementImage] = useState<ProductPhoto | null>(null);
+  const [pickingImage, setPickingImage] = useState(false);
+  const [imageError, setImageError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<EditableProduct | null>(() => {
     if (!source || String(source.product_id) !== String(id)) return null;
     return {
@@ -63,12 +69,25 @@ export default function EditProductScreen() {
   const updateAttribute = (index: number, key: 'name' | 'quantity' | 'unit', value: string) => setForm((current) => current ? { ...current, attributes: current.attributes.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item) } : current);
   const removeAttribute = (index: number) => setForm((current) => current ? { ...current, attributes: current.attributes.filter((_, itemIndex) => itemIndex !== index) } : current);
 
+  const chooseImage = async () => {
+    try {
+      setPickingImage(true); setImageError('');
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: false, quality: 0.85 });
+      if (result.canceled || !result.assets[0]) return;
+      const image = result.assets[0];
+      setReplacementImage({ uri: image.uri, name: image.fileName || `product-${id}.jpg`, mimeType: image.mimeType || 'image/jpeg', file: image.file });
+    } catch { setImageError('Could not open your photos. Please try again.'); }
+    finally { setPickingImage(false); }
+  };
+
   const handleSave = async () => {
+    if (saving || pickingImage) return;
+    setSaveError('');
     if (!form?.product_name.trim() || !form.category_id) return Alert.alert('Missing details', 'Product name and category are required.');
     if (!form.attributes.length || form.attributes.some((item) => !item.name.trim() || !item.quantity || !item.unit.trim())) return Alert.alert('Missing details', 'Complete the name, quantity, and unit for every attribute.');
     try {
       setSaving(true);
-      await saveProduct(form);
+      await saveProduct(form, replacementImage || undefined);
       Alert.alert('Product updated', 'The product and its attributes were saved successfully.');
       const savedListFilters = getProductListFilters();
       router.replace({
@@ -76,10 +95,13 @@ export default function EditProductScreen() {
         params: {
           productName: listProductName ?? savedListFilters.productName,
           categoryId: listCategoryId ?? (savedListFilters.categoryId == null ? '' : String(savedListFilters.categoryId)),
+          refresh: String(Date.now()),
         },
       });
     } catch (error) {
-      Alert.alert('Could not save', error instanceof Error ? error.message : 'Please try again.');
+      const message = error instanceof Error ? error.message : 'Please try again.';
+      setSaveError(message);
+      if (Platform.OS !== 'web') Alert.alert('Could not save', message);
     } finally { setSaving(false); }
   };
 
@@ -92,7 +114,13 @@ export default function EditProductScreen() {
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets>
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Product details</Text>
-          {source?.image_url && <Image source={{ uri: source.image_url }} style={styles.image} contentFit="contain" />}
+          <View style={styles.imageEditor}>
+            {replacementImage?.uri || source?.image_url ? <Image accessibilityLabel={replacementImage ? 'New product image preview' : 'Current product image'} source={{ uri: replacementImage?.uri || source?.image_url }} style={styles.image} contentFit="contain" /> : <View style={[styles.image, styles.imagePlaceholder]}><Text style={styles.imageHint}>No image yet</Text></View>}
+            <Pressable accessibilityRole="button" disabled={saving || pickingImage} onPress={chooseImage} style={styles.changeImageButton}>{pickingImage ? <ActivityIndicator color="#176B45" /> : <Text style={styles.changeImageText}>{source?.image_url || replacementImage ? 'Change image' : 'Add image'}</Text>}</Pressable>
+            {replacementImage && <><Text style={styles.imageHint}>New image selected. Tap Save Product to apply.</Text><Pressable accessibilityRole="button" disabled={saving} onPress={() => { setReplacementImage(null); setImageError(''); }} style={styles.undoImage}><Text style={styles.changeImageText}>{source?.image_url ? 'Keep current image' : 'Remove selection'}</Text></Pressable></>}
+            {!!imageError && <Text accessibilityRole="alert" style={styles.formError}>{imageError}</Text>}
+          </View>
+          {!!saveError && <Text accessibilityRole="alert" style={styles.formError}>{saveError}</Text>}
           <Field label="Product Name *" value={form.product_name} onChangeText={(value) => update('product_name', value)} />
           <Text style={styles.label}>Category *</Text>
           <Pressable onPress={() => setCategoryOpen(true)} style={styles.select}><Text style={styles.selectText}>{categoryName || 'Select category'}</Text><Text>⌄</Text></Pressable>
@@ -133,6 +161,7 @@ export default function EditProductScreen() {
 }
 
 const styles = StyleSheet.create({
+  imageEditor: { alignItems: 'center', paddingBottom: 18, marginBottom: 14, borderBottomWidth: 1, borderBottomColor: '#E3ECE5' }, imagePlaceholder: { alignItems: 'center', justifyContent: 'center' }, changeImageButton: { minHeight: 42, minWidth: 130, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 12, backgroundColor: '#EAF4EC', alignItems: 'center', justifyContent: 'center' }, changeImageText: { color: '#176B45', fontWeight: '700', fontSize: 12 }, imageHint: { color: '#76877C', fontSize: 11, textAlign: 'center', marginTop: 10 }, undoImage: { padding: 12 }, formError: { color: '#A14235', fontSize: 13, lineHeight: 20, marginBottom: 14, marginTop: 10 },
   safeArea: { flex: 1, backgroundColor: '#ECF0F5' }, keyboardArea: { flex: 1 }, header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#D2D6DE' }, back: { width: 40, height: 40, justifyContent: 'center', marginRight: 8 }, backText: { fontSize: 34, color: '#444' }, title: { fontSize: 23, color: '#333', fontWeight: '600' }, breadcrumb: { fontSize: 11, color: '#888', marginTop: 2 }, page: { width: '100%', maxWidth: 760, alignSelf: 'center', padding: 14, paddingBottom: 120 },
   card: { backgroundColor: '#FFF', borderTopWidth: 3, borderTopColor: '#3C8DBC', borderRadius: 3, padding: 16, marginBottom: 14 }, cardHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, cardTitle: { color: '#333', fontSize: 17, fontWeight: '700', marginBottom: 16 }, image: { width: 110, height: 110, alignSelf: 'center', marginBottom: 16, backgroundColor: '#F7F7F7', borderRadius: 4 }, field: { marginBottom: 14 }, label: { color: '#444', fontSize: 12, fontWeight: '700', marginBottom: 7 }, input: { minHeight: 42, borderWidth: 1, borderColor: '#D2D6DE', borderRadius: 2, paddingHorizontal: 11, color: '#333', fontSize: 13, backgroundColor: '#FFF' }, textarea: { minHeight: 84, paddingTop: 10, textAlignVertical: 'top' }, select: { height: 42, borderWidth: 1, borderColor: '#D2D6DE', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, marginBottom: 14 }, selectText: { flex: 1, color: '#333', fontSize: 13 },
   addAttribute: { backgroundColor: '#00A65A', paddingHorizontal: 11, paddingVertical: 8, borderRadius: 3, marginBottom: 12 }, addAttributeText: { color: '#FFF', fontSize: 11, fontWeight: '700' }, attributeCard: { backgroundColor: '#F8FAFB', borderWidth: 1, borderColor: '#E3E7EA', padding: 12, marginBottom: 12 }, attributeHeading: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }, attributeTitle: { color: '#555', fontWeight: '700', fontSize: 13 }, remove: { color: '#DD4B39', fontSize: 11, fontWeight: '700' }, twoColumns: { flexDirection: 'row', gap: 10 }, half: { flex: 1 },
