@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 function load(path, extras = {}) {
   const source = ts.transpileModule(fs.readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { exports: {}, FormData, Response, Request, URL, URLSearchParams, Blob, ...extras };
+  const context = { exports: {}, Headers, FormData, Response, Request, URL, URLSearchParams, Blob, ...extras };
   vm.runInNewContext(source, context);
   return context.exports;
 }
@@ -14,7 +14,7 @@ const options = helpers.parseProductFormOptions(html);
 const product = () => ({ ...helpers.blankProduct(), product_name: 'Test rice', category_id: '5', promotion_id: '1', tax_id: '2', attributes: [{ ...helpers.blankAttribute(), name: '1 kg', quantity: '1', unit: 'kg' }] });
 const build = (data) => helpers.buildProductForm(data, (form, key, photo) => form.append(key, photo.file, photo.name));
 const request = (form, cookie = 'accrabasket_admin=PHPSESSID%3Dtest') => new Request('http://localhost/api/product-create', { method: 'POST', headers: { cookie }, body: form });
-const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, require: name => name === './categories+api' ? load('src/app/api/categories+api.ts', {fetch}) : helpers });
+const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, require: name => name.includes('portal-fetch') ? {portalFetch:fetch} : name === './categories+api' ? load('src/app/api/categories+api.ts', {fetch, require:()=>load('src/services/portal-proxy.ts',{fetch, require:()=>({portalFetch:fetch})})}) : helpers });
 
 (async () => {
   assert.equal(options.categories[0].label, 'Fruit & Vegetable');
@@ -36,9 +36,9 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
   let fallbackCalls = 0;
   let fallbackSaves = 0;
   const fallbackRoute = route(async (url) => {
-    if (url === 'https://crtup.in') {
+    if (url.endsWith('/getCategoryList')) {
       fallbackCalls++;
-      return new Response('var categoryList = {"5":{"id":5,"category_name":"Fruit & Vegetable"}};');
+      return Response.json({status:'success',data:{5:{id:5,category_name:'Fruit & Vegetable'}}});
     }
     if (url.endsWith('/addproduct')) return new Response(emptyCategoriesHtml);
     fallbackSaves++;
@@ -114,7 +114,7 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
     }
     const platformHelpers = os === 'web' ? helpers : load('src/services/product-form.ts', {FormData: NativeFormData});
     const client = load('src/services/api.ts', {
-      require: name => name === './product-form' ? platformHelpers : name === 'react-native' ? {Platform: {OS: os}} : {setItemAsync: async()=>{}},
+      require: name => name === './product-form' ? platformHelpers : name === 'react-native' ? {Platform: {OS: os}} : {setItemAsync: async()=>{},getItemAsync:async()=>JSON.stringify({authenticated:true,userId:42,roleId:1,portalSecurityKey:'a'.repeat(64),portalCookie:'PHPSESSID=test'})},
       localStorage: {setItem: (k,v)=>storage.set(k,v)},
       fetch: async (url, init) => {
         calls++;
@@ -132,6 +132,7 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
     await assert.rejects(client.createProduct(product(), options), /signed-in administrators/);
     assert.equal(calls, 0);
     client.setAuthenticatedRoleId(1);
+    if(os !== 'web') await client.restoreAuthentication();
     const withPhoto = product(); withPhoto.images = [{...photo, uri:'file:///rice.png'}];
     await client.createProduct(withPhoto, options);
     assert.equal(calls, 1);

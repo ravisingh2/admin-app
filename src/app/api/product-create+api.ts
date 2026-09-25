@@ -1,3 +1,4 @@
+import { portalFetch } from '../../services/portal-fetch.server';
 import { assertProductCreated, resolveProductFormOptions, validateProductForm } from '../../services/product-form';
 import { GET as getCategories } from './categories+api';
 
@@ -6,12 +7,12 @@ async function adminOptions(request: Request) {
   if (!match) throw new Error('Your admin product session has expired. Please reconnect products.');
   const cookie = decodeURIComponent(match[1]);
   // Let the authenticated upstream portal authorize access; never trust a posted role ID.
-  const response = await fetch('https://crtup.in/accrabasket/admin/product/addproduct', {
+  const response = await portalFetch('https://crtup.in/accrabasket/admin/product/addproduct', {
     headers: { Cookie: cookie }, redirect: 'manual',
   });
   if (!response.ok) throw new Error('Your admin product session has expired or access was denied. Please reconnect products.');
   const options = await resolveProductFormOptions(await response.text(), async () => {
-    const response = await getCategories();
+    const response = await getCategories(request);
     const result = await response.json();
     if (!response.ok || result.status !== 'success' || !Array.isArray(result.data)) throw new Error('Categories could not be loaded. Please try again.');
     return result.data;
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
       else if (allowed.has(key) && typeof value === 'string') form.append(key, value);
       else return Response.json({ message: 'The form contains an unsupported field or file. Choose image files only.' }, { status: 400 });
     }
-    const response = await fetch('https://crtup.in/accrabasket/admin/product/saveproduct', {
+    const response = await portalFetch('https://crtup.in/accrabasket/admin/product/saveproduct', {
       method: 'POST', headers: { Cookie: cookie }, body: form, redirect: 'manual',
     });
     await assertProductCreated(response);

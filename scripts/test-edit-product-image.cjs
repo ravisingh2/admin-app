@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 function load(path, extras = {}) {
-  const context = { exports: {}, FormData, Response, Request, URL, URLSearchParams, Blob, ...extras };
+  const context = { exports: {}, Headers, FormData, Response, Request, URL, URLSearchParams, Blob, ...extras };
+  if (context.require && context.fetch) { const original = context.require; context.require = name => name.includes('portal-fetch') ? {portalFetch:context.fetch} : original(name); }
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path, 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText, context);
   return context.exports;
 }
@@ -31,9 +32,10 @@ const photo = {uri:'file:///replacement.png',name:'replacement.png',mimeType:'im
   for(const os of ['web','android','ios']) {
     class NativeFormData {constructor(){this.parts=[];}append(k,v){this.parts.push([k,v]);}getParts(){return this.parts;}}
     let sent;
-    const client=load('src/services/api.ts',{FormData:os==='web'?FormData:NativeFormData,require:name=>name==='./product-form'?helpers:name==='react-native'?{Platform:{OS:os}}:{},fetch:async(_url,init)=>{sent=init;return Response.json({status:'success'});}});
+    const client=load('src/services/api.ts',{FormData:os==='web'?FormData:NativeFormData,require:name=>name==='./product-form'?helpers:name==='react-native'?{Platform:{OS:os}}:{getItemAsync:async()=>JSON.stringify({authenticated:true,userId:42,roleId:1,portalSecurityKey:'a'.repeat(64),portalCookie:'PHPSESSID=test'})},fetch:async(_url,init)=>{sent=init;return Response.json({status:'success'});}});
+    if(os !== 'web') await client.restoreAuthentication();
     await client.saveProduct(product,photo);
-    assert.equal(sent.headers?.['Content-Type'],undefined,'Let fetch set the multipart boundary.');
+    assert.equal(sent.headers.get('Content-Type'),null,'Let fetch set the multipart boundary.');
     if(os==='web') {
       assert.equal(JSON.parse(sent.body.get('product')).id,42);
       assert.equal(sent.body.get('product_img[]').name,photo.name);

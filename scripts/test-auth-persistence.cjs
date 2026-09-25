@@ -4,8 +4,8 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const source = ts.transpileModule(fs.readFileSync('src/services/api.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 function load(os, storage, fetch = async () => Response.json({ status: 'success' })) {
-  const context = { exports: {}, require: name => {
-    if(name === './product-form') return {};
+  const context = { exports: {}, Headers, require: name => {
+    if(name === './product-form' || name === './order-endpoints') return {};
     if(name === 'react-native') return {Platform: {OS: os}};
     if(name === 'expo-secure-store') return {getItemAsync: async k => storage.get(k) ?? null, setItemAsync: async (k,v) => storage.set(k,v), deleteItemAsync: async k => storage.delete(k)};
     throw Error(name);
@@ -50,12 +50,12 @@ function load(os, storage, fetch = async () => Response.json({ status: 'success'
     if(step===2) return new Response('<html>Dashboard</html>',{status:200});
     return Response.json({status:'success',data:{}});
   });
-  await api.createAdminSession('test-user','test-password',2);
+  await api.createAdminSession('test-user','test-password',2,'a'.repeat(64));
   assert.equal(step,3);
   api.setAuthenticatedRoleId(2); api.setAuthenticatedUserId(42); await api.setAuthenticated(true);
   assert.ok(![...storage.values()][0].includes('test-password'));
   let cookie='';
-  const restarted=load('android',storage,async(url,options)=>{cookie=options.headers.Cookie;return Response.json({status:'success',data:{}});});
+  const restarted=load('android',storage,async(url,options)=>{cookie=options.headers.get("Cookie");return Response.json({status:'success',data:{}});});
   await restarted.restoreAuthentication(); await restarted.getProductPage();
   assert.equal(cookie,'PHPSESSID=test');
   const expired=load('android',storage,async()=>new Response('',{status:401}));

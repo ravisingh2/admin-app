@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 function load(path, fetch) {
   const source = ts.transpileModule(fs.readFileSync(path, 'utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText;
-  const context = {exports: {}, fetch, Response, URL, URLSearchParams};
+  const context = {exports: {}, require:()=>({portalFetch:fetch}), fetch, Response, URL, URLSearchParams};
   vm.runInNewContext(source, context);
   return context.exports;
 }

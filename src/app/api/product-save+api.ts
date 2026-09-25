@@ -1,3 +1,4 @@
+import { portalFetch } from '../../services/portal-fetch.server';
 import { assertProductCreated } from '../../services/product-form';
 
 type EditableProduct = {
@@ -61,7 +62,7 @@ export async function POST(request: Request) {
     });
     if (image) form.append('product_img[]', image, image.name);
 
-    const upstream = await fetch('https://crtup.in/accrabasket/admin/product/saveproduct', {
+    const upstream = await portalFetch('https://crtup.in/accrabasket/admin/product/saveproduct', {
       method: 'POST',
       headers: { Cookie: decodeURIComponent(sessionMatch[1]) },
       body: form,

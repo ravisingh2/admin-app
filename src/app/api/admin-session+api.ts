@@ -1,3 +1,4 @@
+import { portalFetch } from '../../services/portal-fetch.server';
 export async function POST(request: Request) {
   try {
     const { username, password, roleId } = await request.json() as { username?: string; password?: string; roleId?: number };
@@ -5,7 +6,7 @@ export async function POST(request: Request) {
 
     // The shared portal login establishes the session and routes by user role.
     const loginUrl = 'https://crtup.in/accrabasket/admin/index';
-    const upstream = await fetch(loginUrl, {
+    const upstream = await portalFetch(loginUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ username, password }).toString(),

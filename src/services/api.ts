@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { assertProductCreated, buildProductForm, NewProduct, resolveProductFormOptions, ProductFormOptions, validateNewProduct } from './product-form';
 import type { ProductPhoto } from './product-form';
+import { orderEndpoints } from './order-endpoints';
 
 const API_URL = 'https://crtup.in/api';
 
@@ -30,6 +31,19 @@ let authenticatedUserId = 0;
 let authenticatedUserName = '';
 let authenticated = false;
 let merchantPortalCookie = '';
+let portalSecurityKey = '';
+
+// Browser cookies are HttpOnly; native sessions are restored from SecureStore.
+async function sessionFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (Platform.OS !== 'web') {
+    if (!merchantPortalCookie) throw new Error('Your portal session has expired. Please sign in again.');
+    headers.set('Cookie', merchantPortalCookie);
+    if (!portalSecurityKey) throw new Error('Please sign in again with your portal security key.');
+    headers.set('X-Accrabasket-App-Key', portalSecurityKey);
+  }
+  return fetch(url, { ...init, headers, credentials: 'include' });
+}
 
 const authListeners = new Set<() => void>();
 export function subscribeAuthentication(listener: () => void) {
@@ -59,6 +73,7 @@ export async function restoreAuthentication(): Promise<void> {
     authenticatedUserId = Number(session.userId);
     authenticatedUserName = typeof session.userName === 'string' ? session.userName : '';
     merchantPortalCookie = Platform.OS === 'web' ? '' : String(session.portalCookie || '');
+    portalSecurityKey = Platform.OS === 'web' ? '' : String(session.portalSecurityKey || '');
     notifyAuthentication();
   }
 }
@@ -66,7 +81,7 @@ export async function restoreAuthentication(): Promise<void> {
 export async function setAuthenticated(value: boolean): Promise<void> {
   if (value) {
     const session = JSON.stringify({ authenticated: true, roleId: authenticatedRoleId, userId: authenticatedUserId, userName: authenticatedUserName,
-      ...(Platform.OS === 'web' ? {} : { portalCookie: merchantPortalCookie }) });
+      ...(Platform.OS === 'web' ? {} : { portalCookie: merchantPortalCookie, portalSecurityKey }) });
     if (Platform.OS === 'web') localStorage.setItem(SESSION_KEY, session);
     else await SecureStore.setItemAsync(SESSION_KEY, session);
     authenticated = true;
@@ -74,13 +89,14 @@ export async function setAuthenticated(value: boolean): Promise<void> {
     if (Platform.OS === 'web') {
       localStorage.removeItem(SESSION_KEY);
       for (const key of ['accrabasket_authenticated', 'accrabasket_role_id', 'accrabasket_user_id', 'accrabasket_product_filters', 'accrabasket_product_scroll']) sessionStorage.removeItem(key);
-      await fetch('/api/admin-session', { method: 'DELETE', credentials: 'include' }).catch(() => undefined);
+      await sessionFetch('/api/admin-session', { method: 'DELETE', credentials: 'include' }).catch(() => undefined);
     } else await SecureStore.deleteItemAsync(SESSION_KEY);
     authenticated = false;
     authenticatedRoleId = 0;
     authenticatedUserId = 0;
     authenticatedUserName = '';
     merchantPortalCookie = '';
+    portalSecurityKey = '';
     selectedProduct = null;
     productListFilters = { productName: '', categoryId: null };
     productListScrollOffset = 0;
@@ -106,7 +122,7 @@ export async function getNewProductOptions(): Promise<ProductFormOptions> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/addproduct', {
+    const response = await sessionFetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/addproduct', {
       credentials: 'include', signal: controller.signal,
       headers: !web && merchantPortalCookie ? { Cookie: merchantPortalCookie } : undefined,
     });
@@ -143,7 +159,7 @@ export async function createProduct(product: NewProduct, options: ProductFormOpt
       body.append(key, { uri: photo.uri, name: photo.name, type: photo.mimeType } as unknown as Blob);
     }
   });
-  const response = await fetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
+  const response = await sessionFetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
     method: 'POST', body: form, credentials: 'include', redirect: 'manual',
     headers: !web && merchantPortalCookie ? { Cookie: merchantPortalCookie } : undefined,
   });
@@ -172,16 +188,36 @@ export type MerchantStore = { id: number; store_name: string };
 export type MerchantOption = { id: number; name: string };
 
 async function callBasketApi(controller: 'index' | 'product' | 'customer', parameters: Record<string, unknown>) {
-  const response = await fetch(`https://crtup.in/basketapi/index.php/application/${controller}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ parameters: JSON.stringify(parameters), rqid: '' }).toString(),
+  if (!authenticated || authenticatedRoleId !== 2) throw new Error('A merchant session is required for this operation.');
+  const endpoints: Record<string, string> = {
+    'customer:orderlist': 'getOrderList',
+    'customer:updateOrderstatus': 'changestatus',
+    'index:storeList': 'storelist',
+    'index:addEditInventry': 'saveinventory',
+  };
+  const action = endpoints[controller + ':' + parameters.method];
+  if (!action) throw new Error('Unsupported portal operation.');
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(parameters)) {
+    if (key === 'method' || key === 'merchant_id') continue;
+    if (Array.isArray(value)) value.forEach(item => body.append(key + '[]', String(item)));
+    else if (value != null) body.set(key, String(value));
+  }
+  const response = await sessionFetch(Platform.OS === 'web'
+    ? '/api/merchant?action=' + action
+    : 'https://crtup.in/accrabasket/merchant/product/' + action, {
+    method: 'POST', redirect: 'manual',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
   });
-  if (!response.ok) throw new Error(`The server returned an error (${response.status}).`);
+  if (response.status === 401 || response.status === 403 || (response.status >= 300 && response.status < 400)) {
+    throw new Error('Your portal session has expired or access was denied. Please sign in again.');
+  }
+  if (!response.ok) throw new Error('The portal request failed.');
   return response.json() as Promise<{ status?: string; data?: unknown; msg?: string }>;
 }
 
 export type MerchantOrder = {
+  storeId: number;
   orderId: string; userName: string; shippingAddress: string; commissionAmount: string;
   amount: string; status: string; deliveryDate: string; createdDate: string; timeSlot: string;
 };
@@ -193,9 +229,50 @@ export type MerchantOrderItem = {
 
 export type MerchantOrderDetails = MerchantOrder & { userId: number; items: MerchantOrderItem[] };
 
+async function callAdminOrders(action: keyof typeof orderEndpoints, fields: Record<string, string>) {
+  if (!authenticated || authenticatedRoleId !== 1) throw new Error('Only signed-in administrators can manage rider assignments.');
+  const web = Platform.OS === 'web';
+  const response = await sessionFetch(web ? `/api/orders?action=${action}` : `https://crtup.in/accrabasket/admin/${orderEndpoints[action]}`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(!web && merchantPortalCookie ? { Cookie: merchantPortalCookie } : {}) },
+    body: new URLSearchParams(fields).toString(),
+  });
+  let result;
+  try { result = await response.json(); }
+  catch { throw new Error('Your order session is unavailable. Please sign out and sign in again.'); }
+  if (!response.ok) throw new Error(result.msg || result.message || 'The order service is unavailable.');
+  return result;
+}
+
+async function fetchOrders(fields: Record<string, string>) {
+  if (getAuthenticatedRoleId() === 1) return callAdminOrders('list', fields);
+  if (!authenticated || getAuthenticatedRoleId() !== 2) throw new Error('Please sign in as an administrator or merchant to view orders.');
+  return callBasketApi('customer', { method: 'orderlist', merchant_id: getAuthenticatedUserId(), pagination: 1, ...fields });
+}
+
+export type OrderRider = { id: string; name: string };
+export async function getOrderRiders(storeId: number): Promise<OrderRider[]> {
+  if (!Number.isFinite(storeId) || storeId <= 0) throw new Error('This order has no valid store for rider assignment.');
+  const result = await callAdminOrders('riders', { store_id: String(storeId) });
+  if (result.status !== 'success') {
+    if (/^no record found\s*$/i.test(result.msg || '')) return [];
+    throw new Error(result.msg || 'Riders could not be loaded.');
+  }
+  return Object.entries(result.data || {}).map(([id, value]) => {
+    const rider = value as Record<string, unknown>;
+    return { id: String(rider.id || id), name: String(rider.name || rider.first_name || rider.username || `Rider ${id}`) };
+  });
+}
+
+export async function assignOrderRider(orderId: string, riderId: string): Promise<void> {
+  if (!orderId.trim() || !riderId.trim()) throw new Error('Please select an order and rider.');
+  const result = await callAdminOrders('assign', { order_id: orderId, rider_id: riderId });
+  if (result.status !== 'success') throw new Error(result.msg || 'The rider could not be assigned.');
+}
+
 export async function getMerchantOrderDetails(orderId: string): Promise<MerchantOrderDetails> {
-  const result = await callBasketApi('customer', {
-    method: 'orderlist', merchant_id: getAuthenticatedUserId(), order_id: orderId,
+  const result = await fetchOrders({
+    order_id: orderId,
   }) as { status?: string; data?: Record<string, { order_details: Record<string, unknown>; orderitem?: Record<string, Record<string, unknown>> }>; shipping_address_list?: Record<string, Record<string, unknown>>; user_details?: Record<string, Record<string, unknown>>; time_slot_list?: Record<string, Record<string, unknown>>; imageRootPath?: string; msg?: string };
   const record = result.data?.[orderId] || Object.values(result.data || {})[0];
   if (result.status !== 'success' || !record) throw new Error(result.msg || 'Order details could not be loaded.');
@@ -221,6 +298,7 @@ export async function getMerchantOrderDetails(orderId: string): Promise<Merchant
     };
   });
   return {
+    storeId: Number(order.store_id || 0),
     userId: Number(order.user_id || 0),
     orderId: String(order.order_id || orderId), userName: String(user.name || address.contact_name || '—'),
     shippingAddress: String(address.city_name || address.address_nickname || '—'), commissionAmount: String(order.commission_amount || '0.00'),
@@ -234,7 +312,7 @@ export async function updateMerchantOrderStatus(orderId: string, userId: number,
   const result = await callBasketApi('customer', {
     method: 'updateOrderstatus',
     user_id: userId,
-    merchant_id: getAuthenticatedUserId(),
+    ...(getAuthenticatedRoleId() === 2 ? { merchant_id: getAuthenticatedUserId() } : {}),
     order_id: orderId,
     order_status: status,
   });
@@ -242,17 +320,21 @@ export async function updateMerchantOrderStatus(orderId: string, userId: number,
 }
 
 export async function getMerchantOrderPage(filters: { page?: number; status?: string; orderId?: string } = {}): Promise<{ orders: MerchantOrder[]; total: number }> {
-  const result = await callBasketApi('customer', {
-    method: 'orderlist', merchant_id: getAuthenticatedUserId(), pagination: 1,
-    page: filters.page || 1,
+  const result = await fetchOrders({
+    page: String(filters.page || 1),
     ...(filters.orderId?.trim() ? { order_id: filters.orderId.trim() } : { order_status: filters.status || 'current_order' }),
   }) as { status?: string; data?: Record<string, { order_details: Record<string, unknown> }>; shipping_address_list?: Record<string, Record<string, unknown>>; user_details?: Record<string, Record<string, unknown>>; time_slot_list?: Record<string, Record<string, unknown>>; totalNumberOfOrder?: number; msg?: string };
-  if (result.status !== 'success' || !result.data) return { orders: [], total: 0 };
+  if (result.status !== 'success') {
+    if (/^no record found\s*$/i.test(result.msg || '')) return { orders: [], total: 0 };
+    throw new Error(result.msg || 'Orders could not be loaded.');
+  }
+  if (!result.data) return { orders: [], total: 0 };
   const orders = Object.values(result.data).map(({ order_details: order }) => {
     const user = result.user_details?.[String(order.user_id)] || {};
     const address = result.shipping_address_list?.[String(order.shipping_address_id)] || {};
     const slot = result.time_slot_list?.[String(order.time_slot_id)] || {};
     return {
+      storeId: Number(order.store_id || 0),
       orderId: String(order.order_id || ''), userName: String(user.name || address.contact_name || '—'),
       shippingAddress: String(address.city_name || address.address_nickname || '—'),
       commissionAmount: String(order.commission_amount || '0.00'), amount: String(order.amount || order.payable_amount || '0.00'),
@@ -413,18 +495,20 @@ type ProductListResponse = {
   msg?: string;
 };
 
-export async function createAdminSession(username: string, password: string, roleId = 0): Promise<void> {
+export async function createAdminSession(username: string, password: string, roleId = 0, securityKey = ''): Promise<void> {
   const isWeb = Platform.OS === 'web';
+  const nativeKey = securityKey.trim();
+  if (!isWeb && !/^[a-f0-9]{64}$/.test(nativeKey)) throw new Error('Enter your 64-character portal security key.');
   const nativeLoginUrl = 'https://crtup.in/accrabasket/admin/index';
   // Establish a cookie explicitly because Android may hide redirect cookies.
   let portalCookie = '';
   if (!isWeb) {
-    const initial = await fetch('https://crtup.in/accrabasket/admin/index/login', { credentials: 'omit' });
+    const initial = await fetch('https://crtup.in/accrabasket/admin/index/login', { credentials: 'omit', headers: { 'X-Accrabasket-App-Key': nativeKey }, redirect: 'manual' });
     portalCookie = (initial.headers.get('set-cookie') || '').split(';')[0];
   }
   const response = await fetch(isWeb ? '/api/admin-session' : nativeLoginUrl, {
     method: 'POST',
-    headers: isWeb ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/x-www-form-urlencoded', ...(portalCookie ? { Cookie: portalCookie } : {}) },
+    headers: isWeb ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Accrabasket-App-Key': nativeKey, ...(portalCookie ? { Cookie: portalCookie } : {}) },
     body: isWeb ? JSON.stringify({ username, password, roleId }) : new URLSearchParams({ username, password }).toString(),
     credentials: 'include',
     redirect: isWeb ? 'follow' : 'manual',
@@ -438,13 +522,14 @@ export async function createAdminSession(username: string, password: string, rol
       ? 'https://crtup.in/accrabasket/merchant/product/getproductlist'
       : 'https://crtup.in/accrabasket/admin/product/getProductList', {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: portalCookie },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Accrabasket-App-Key': nativeKey, Cookie: portalCookie },
       body: 'page=1&limit=1',
     });
     const result = await check.json() as ProductListResponse;
     const noProducts = result.status === 'fail' && (result.msg || result.message)?.trim().toLowerCase() === 'no record found';
     if (!check.ok || (result.status !== 'success' && !noProducts)) throw new Error('Unable to open the product portal session.');
     merchantPortalCookie = portalCookie;
+    portalSecurityKey = nativeKey;
     return;
   }
   if (!response.ok) throw new Error('Unable to open the product portal session.');
@@ -501,29 +586,18 @@ export async function getProductPage(filters: { productName?: string; categoryId
     params.set('role_id', String(roleId));
     if (merchantId) params.set('merchant_id', String(merchantId));
     const isMerchant = roleId === 2;
-    const fetchProducts = async (source: 'mapped' | 'inventory' | 'admin') => {
+    const fetchProducts = async (source: 'mapped' | 'admin') => {
       const requestParams = new URLSearchParams(params);
       requestParams.set('source', source);
-      const merchantApiParameters = JSON.stringify({
-        method: 'productlist',
-        all_product: 1,
-        pagination: 0,
-        page: 1,
-        merchant_id: merchantId,
-      });
-      const nativeProductUrl = source === 'inventory'
-        ? 'https://crtup.in/basketapi/index.php/application/product'
-        : source === 'mapped'
-          ? 'https://crtup.in/accrabasket/merchant/product/getproductlist'
-          : 'https://crtup.in/accrabasket/admin/product/getProductList';
+      const nativeProductUrl = source === 'mapped'
+        ? 'https://crtup.in/accrabasket/merchant/product/getproductlist'
+        : 'https://crtup.in/accrabasket/admin/product/getProductList';
       const nativeHeaders: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
       if (merchantPortalCookie) nativeHeaders.Cookie = merchantPortalCookie;
-      const response = await fetch(isWeb ? `/api/products?${requestParams}` : nativeProductUrl, {
+      const response = await sessionFetch(isWeb ? `/api/products?${requestParams}` : nativeProductUrl, {
         method: isWeb ? 'GET' : 'POST',
         headers: isWeb ? undefined : nativeHeaders,
-        body: isWeb ? undefined : source === 'inventory'
-          ? new URLSearchParams({ parameters: merchantApiParameters, rqid: '' }).toString()
-          : requestParams.toString(),
+        body: isWeb ? undefined : requestParams.toString(),
         signal: controller.signal,
         credentials: 'include',
       });
@@ -582,21 +656,14 @@ export async function getProductPage(filters: { productName?: string; categoryId
 }
 
 export async function getCategories(): Promise<Category[]> {
-  const response = await fetch(Platform.OS === 'web' ? '/api/categories' : 'https://crtup.in');
-  if (!response.ok) throw new Error('Categories could not be loaded.');
-
-  if (Platform.OS === 'web') {
-    const result = await response.json() as { status?: string; data?: Category[]; message?: string };
-    if (result.status?.toLowerCase() !== 'success' || !Array.isArray(result.data)) {
-      throw new Error(result.message || 'Categories could not be loaded.');
-    }
-    return result.data.map((category) => ({ ...category, id: Number(category.id) }));
-  }
-
-  const html = await response.text();
-  const match = html.match(/var\s+categoryList\s*=\s*(\{[\s\S]*?\});/);
-  if (!match?.[1]) throw new Error('The category list was not found.');
-  return Object.values(JSON.parse(match[1]) as Record<string, Category>);
+  const portal = getAuthenticatedRoleId() === 2 ? 'merchant' : 'admin';
+  const response = await sessionFetch(Platform.OS === 'web'
+    ? '/api/categories?portal=' + portal
+    : 'https://crtup.in/accrabasket/' + portal + '/product/getCategoryList', { method: 'POST' });
+  if (!response.ok) throw new Error('Your category session is unavailable. Please sign in again.');
+  const result = await response.json() as { status?: string; data?: Record<string, Category> | Category[]; msg?: string; message?: string };
+  if (result.status !== 'success' || !result.data) throw new Error(result.message || result.msg || 'Categories could not be loaded.');
+  return Object.values(result.data).map(category => ({ ...category, id: Number(category.id) }));
 }
 
 export async function saveProduct(product: EditableProduct, replacementImage?: ProductPhoto): Promise<void> {
@@ -647,7 +714,7 @@ export async function saveProduct(product: EditableProduct, replacementImage?: P
     body = form;
   }
 
-  const response = await fetch(isWeb ? '/api/product-save' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
+  const response = await sessionFetch(isWeb ? '/api/product-save' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
     method: 'POST', headers: !isWeb && merchantPortalCookie ? { ...headers, Cookie: merchantPortalCookie } : headers, body, credentials: 'include', redirect: 'follow',
   });
   await assertProductCreated(response);
@@ -661,7 +728,7 @@ async function adminMerchantMappingRequest(action: 'merchants' | 'mappings' | 'm
   const requestBody = action === 'map' && body
     ? new URLSearchParams([['product_id', String(body.productId)], ...body.merchantIds.map((id) => ['merchant_ids[]', String(id)])]).toString()
     : '';
-  const response = await fetch(isWeb ? `/api/merchant-mapping?action=${action}` : `https://crtup.in/accrabasket/admin/product/${endpoint}`, {
+  const response = await sessionFetch(isWeb ? `/api/merchant-mapping?action=${action}` : `https://crtup.in/accrabasket/admin/product/${endpoint}`, {
     method: action === 'map' ? 'POST' : 'GET',
     headers: { ...(action === 'map' ? { 'Content-Type': isWeb ? 'application/json' : 'application/x-www-form-urlencoded' } : {}), ...(!isWeb && merchantPortalCookie ? { Cookie: merchantPortalCookie } : {}) },
     body: action === 'map' ? (isWeb ? JSON.stringify(body) : requestBody) : undefined,

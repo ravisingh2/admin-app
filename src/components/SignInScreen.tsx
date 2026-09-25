@@ -9,6 +9,7 @@ import { loginStyles as styles } from '@/styles/LoginStyles';
 
 export default function SignInScreen({ reconnect = false }: { reconnect?: boolean }) {
   const [username, setUsername] = useState('');
+  const [securityKey, setSecurityKey] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -18,6 +19,10 @@ export default function SignInScreen({ reconnect = false }: { reconnect?: boolea
     const cleanUsername = username.trim();
     if (!cleanUsername || !password) {
       Alert.alert('Missing details', 'Enter both your username and password.');
+      return;
+    }
+    if (Platform.OS !== 'web' && !/^[a-f0-9]{64}$/.test(securityKey.trim())) {
+      setLoginError('Enter the security key provided by your administrator.');
       return;
     }
     try {
@@ -41,7 +46,7 @@ export default function SignInScreen({ reconnect = false }: { reconnect?: boolea
         let sessionReady = false;
         for (const portalUsername of portalUsernames) {
           try {
-            await createAdminSession(portalUsername, password, roleId);
+            await createAdminSession(portalUsername, password, roleId, securityKey);
             sessionReady = true;
             break;
           } catch { /* Try the account's alternate login identifier. */ }
@@ -90,6 +95,7 @@ export default function SignInScreen({ reconnect = false }: { reconnect?: boolea
               <TextInput style={styles.passwordInput} placeholder="Enter your password" placeholderTextColor="#94A3B8" value={password} onChangeText={setPassword} editable={!loading} secureTextEntry={!showPassword} onSubmitEditing={handleLogin} returnKeyType="go" />
               <Pressable onPress={() => setShowPassword((value) => !value)} hitSlop={10}><Text style={styles.showText}>{showPassword ? 'Hide' : 'Show'}</Text></Pressable>
             </View>
+            {Platform.OS !== 'web' && <><Text style={styles.label}>Portal security key</Text><TextInput style={styles.input} value={securityKey} onChangeText={setSecurityKey} placeholder="Enter your portal security key" secureTextEntry autoCapitalize="none" autoCorrect={false} editable={!loading} /></>}
             <Pressable onPress={handleLogin} disabled={loading} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, loading && styles.buttonDisabled]}>
               {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.buttonText}>Sign in</Text>}
             </Pressable>

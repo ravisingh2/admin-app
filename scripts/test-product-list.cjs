@@ -6,13 +6,14 @@ const source = ts.transpileModule(fs.readFileSync('src/services/api.ts', 'utf8')
 async function run(os, role, response) {
   const calls = [];
   const storage = new Map();
-  const context = { exports: {}, require: (name) => { if (name === 'expo-secure-store' || name === './product-form') return {}; assert.equal(name, 'react-native'); return { Platform: { OS: os } }; }, URLSearchParams, AbortController, setTimeout, clearTimeout,
+  const context = { exports: {}, Headers, require: (name) => { if (name === 'expo-secure-store') return { getItemAsync: async () => JSON.stringify({authenticated:true,userId:42,roleId:role,portalSecurityKey:'a'.repeat(64),portalCookie:'PHPSESSID=test'}) }; if ( name === './product-form' || name === './order-endpoints') return {}; assert.equal(name, 'react-native'); return { Platform: { OS: os } }; }, URLSearchParams, AbortController, setTimeout, clearTimeout,
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, text: async () => typeof response === 'string' ? response : JSON.stringify(response) }; }
   };
   vm.runInNewContext(source, context);
   context.exports.setAuthenticatedRoleId(role);
   context.exports.setAuthenticatedUserId(42);
+  if(os !== 'web') await context.exports.restoreAuthentication();
   const result = await context.exports.getProductPage({ page: 2, limit: 10 });
   return { result, calls };
 }

@@ -1,9 +1,10 @@
-import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { getMerchantOrderPage, MerchantOrder } from '@/services/api';
+import { getAuthenticatedRoleId, getMerchantOrderPage, MerchantOrder } from '@/services/api';
+import AssignRiderModal from '@/components/AssignRiderModal';
 
 const STATUSES = [
   ['order_placed', 'Placed'],
@@ -37,17 +38,22 @@ export default function OrdersScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [assignmentOrder, setAssignmentOrder] = useState<MerchantOrder | null>(null);
+  const [notice, setNotice] = useState('');
+  const requestId = useRef(0);
   const busy = useRef(false);
   const scrollReady = useRef(false);
   const lastScrollY = useRef(0);
 
   const load = useCallback(async (nextPage: number, append = false, refresh = false) => {
-    if (busy.current) return;
+    if (append && busy.current) return;
+    const id = ++requestId.current;
     busy.current = true;
     if (append) setLoadingMore(true); else if (refresh) setRefreshing(true); else setLoading(true);
     setError('');
     try {
       const result = await getMerchantOrderPage({ page: nextPage, status, orderId: search });
+      if (id !== requestId.current) return;
       setOrders((current) => {
         const newOrders = append ? result.orders.filter((item) => !current.some((old) => old.orderId === item.orderId)) : result.orders;
         const combined = append ? [...current, ...newOrders] : newOrders;
@@ -55,20 +61,22 @@ export default function OrdersScreen() {
         return combined;
       });
       setPage(nextPage + 1);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Orders could not be loaded.'); }
-    finally { busy.current = false; setLoading(false); setLoadingMore(false); setRefreshing(false); }
+    } catch (reason) { if (id === requestId.current) setError(reason instanceof Error ? reason.message : 'Orders could not be loaded.'); }
+    finally { if (id === requestId.current) { busy.current = false; setLoading(false); setLoadingMore(false); setRefreshing(false); } }
   }, [search, status]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     scrollReady.current = false;
     lastScrollY.current = 0;
     const timer = setTimeout(() => void load(1), 350);
-    return () => clearTimeout(timer);
-  }, [status, search]);
+    return () => { clearTimeout(timer); requestId.current++; busy.current = false; };
+  }, [load]));
 
   return <SafeAreaView style={styles.safe}>
     <View style={styles.header}><Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable><Text style={styles.title}>Orders</Text></View>
     <View style={styles.content}>
+      {!!notice && <Text accessibilityRole="alert" style={styles.muted}>{notice}</Text>}
+      {!!error && !!orders.length && <View><Text style={styles.error}>{error}</Text><Pressable onPress={() => void load(1, false, true)}><Text style={styles.orderId}>Retry</Text></Pressable></View>}
       <TextInput value={search} onChangeText={setSearch} placeholder="Search by order ID" placeholderTextColor="#999" autoCapitalize="none" style={styles.search} />
       <View style={styles.tabsWrap}><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statuses}>{STATUSES.map(([value, label]) => <Pressable accessibilityRole="tab" accessibilityState={{ selected: status === value }} key={value} onPress={() => { scrollReady.current = false; lastScrollY.current = 0; setOrders([]); setPage(1); setStatus(value); }} style={[styles.statusTab, status === value && styles.statusTabActive]}><Text style={[styles.statusTabText, status === value && styles.statusTabTextActive]}>{label}</Text></Pressable>)}</ScrollView></View>
       {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3C8DBC" /><Text style={styles.muted}>Loading orders…</Text></View> : error && !orders.length ? <View style={styles.center}><Text style={styles.error}>{error}</Text><Pressable onPress={() => void load(1)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View> : <FlatList
@@ -82,9 +90,11 @@ export default function OrdersScreen() {
           <Text style={styles.customer}>{item.userName}</Text><Text style={styles.address} numberOfLines={2}>{item.shippingAddress}</Text>
           <View style={styles.metrics}><View><Text style={styles.metricLabel}>Amount</Text><Text style={styles.amount}>{item.amount}</Text></View><View><Text style={styles.metricLabel}>Commission</Text><Text style={styles.metric}>{item.commissionAmount}</Text></View><View><Text style={styles.metricLabel}>Delivery</Text><Text style={styles.metric}>{item.deliveryDate}</Text><Text style={styles.slot}>{item.timeSlot}</Text></View></View>
           <Text style={styles.created}>Ordered: {item.createdDate}</Text>
+          {getAuthenticatedRoleId() === 1 && <Pressable accessibilityRole="button" onPress={() => { setNotice(''); setAssignmentOrder(item); }} style={styles.retry}><Text style={styles.retryText}>{item.status === 'assigned_to_rider' ? 'Reassign Rider' : 'Assign Rider'}</Text></Pressable>}
         </View>}
       />}
     </View>
+    <AssignRiderModal order={assignmentOrder} onClose={() => setAssignmentOrder(null)} onAssigned={() => { setAssignmentOrder(null); setNotice('Rider assigned successfully.'); void load(1, false, true); }} />
   </SafeAreaView>;
 }
 

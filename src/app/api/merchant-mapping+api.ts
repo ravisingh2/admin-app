@@ -1,3 +1,4 @@
+import { portalFetch } from '../../services/portal-fetch.server';
 function upstreamCookie(request: Request) {
   const match = (request.headers.get('cookie') || '').match(/(?:^|;\s*)accrabasket_admin=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : '';
@@ -12,7 +13,7 @@ async function forward(request: Request, action: string, body = '') {
   if (!endpoint) return Response.json({ status: 'error', msg: 'Invalid mapping action.' }, { status: 400 });
   if (!cookie) return Response.json({ status: 'error', msg: 'Admin session required.' }, { status: 401 });
   try {
-    const response = await fetch(`https://crtup.in/accrabasket/admin/product/${endpoint}`, {
+    const response = await portalFetch(`https://crtup.in/accrabasket/admin/product/${endpoint}`, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie }, body,
     });
     return new Response(await response.text(), { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
