@@ -159,11 +159,20 @@ export async function createProduct(product: NewProduct, options: ProductFormOpt
       body.append(key, { uri: photo.uri, name: photo.name, type: photo.mimeType } as unknown as Blob);
     }
   });
-  const response = await sessionFetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
-    method: 'POST', body: form, credentials: 'include', redirect: 'manual',
-    headers: !web && merchantPortalCookie ? { Cookie: merchantPortalCookie } : undefined,
-  });
-  await assertProductCreated(response);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await sessionFetch(web ? '/api/product-create' : 'https://crtup.in/accrabasket/admin/product/saveproduct', {
+      method: 'POST', body: form, credentials: 'include', redirect: 'manual', signal: controller.signal,
+      headers: !web && merchantPortalCookie ? { Cookie: merchantPortalCookie } : undefined,
+    });
+    await assertProductCreated(response);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Saving the product took too long. Check the product list before retrying to avoid creating a duplicate.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export type ProductVariant = {

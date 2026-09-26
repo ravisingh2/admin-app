@@ -90,6 +90,7 @@ export function validateProductForm(form: { get: (key: string) => unknown; getAl
   const value = (key: string) => String(form.get(key) ?? '').trim();
   if (value('id')) return 'This form can only create a new product.';
   if (!value('product_name') || !value('category_id')) return 'Enter a product name and choose a category.';
+  if (!value('item_code')) return 'Enter an item code. It is required when creating a product.';
   if (!['0', '1'].includes(value('status'))) return 'Choose a valid product status.';
   if (options) {
     for (const [key, choices] of [['category_id', options.categories], ['promotion_id', options.promotions], ['tax_id', options.taxes]] as const) {
@@ -155,11 +156,14 @@ export function buildProductForm(product: NewProduct, appendPhoto: (form: FormDa
 }
 
 export async function assertProductCreated(response: Response): Promise<void> {
-  if (response.status === 401 || response.status === 403 || /\/login(?:[/?#]|$)/i.test(response.url)) throw new Error('Your admin product session has expired. Please reconnect products.');
+  if (response.status === 401 || /\/login(?:[/?#]|$)/i.test(response.url)) throw new Error('Your admin product session has expired. Please reconnect products.');
+  if (response.status === 403) throw new Error('The product portal denied permission to save this product.');
   if (response.status >= 300 && response.status < 400) {
     const target = new URL(response.headers.get('location') || '/', 'https://crtup.in');
+    if (/\/login(?:\/|$)/i.test(target.pathname)) throw new Error('Your admin product session has expired. Please reconnect products.');
     if (target.origin === 'https://crtup.in' && /^\/accrabasket\/admin\/product(?:\/index)?\/?$/.test(target.pathname)) return;
-    throw new Error('The product was not confirmed as saved. Please check your admin session and product details.');
+    if (target.pathname === '/accrabasket/admin/product/addproduct') throw new Error('The product service rejected the product details and returned to the add form. Your login is still valid.');
+    throw new Error('The product service returned an unexpected redirect. Saving was not confirmed.');
   }
   const text = await response.text();
   if ((response.headers.get('content-type') || '').includes('application/json')) {

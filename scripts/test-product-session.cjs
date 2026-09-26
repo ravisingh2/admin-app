@@ -20,6 +20,18 @@ function load(path, fetch) {
   assert.equal(response.status, 200);
   const cookie = response.headers.get('set-cookie').split(';')[0];
   assert.ok(cookie.startsWith('accrabasket_admin='));
+  const adminSession = load('src/app/api/admin-session+api.ts', async (url) => {
+    if (url.endsWith('/admin/index')) return new Response(null, {status: 302, headers: {'set-cookie': 'site_access=ok; Path=/, PHPSESSID=admin-session; Path=/', location: '/accrabasket/admin/dashboard'}});
+    assert.equal(url, 'https://crtup.in/accrabasket/admin/product/addproduct');
+    return new Response('<form action=saveproduct method=post></form>');
+  });
+  const adminResponse = await adminSession.POST(new Request('http://localhost/api/admin-session', {method: 'POST', body: JSON.stringify({username: 'admin-test', password: 'test-only', roleId: 1})}));
+  assert.equal(adminResponse.status, 200);
+  assert.match(adminResponse.headers.get('set-cookie'), /site_access%3Dok%3B%20PHPSESSID%3Dadmin-session/);
+  const noCreateAccess = load('src/app/api/admin-session+api.ts', async (url) => url.endsWith('/admin/index')
+    ? new Response(null, {status: 302, headers: {'set-cookie': 'PHPSESSID=admin-session; Path=/', location: '/accrabasket/admin/dashboard'}})
+    : new Response(null, {status: 302, headers: {location: '/accrabasket/admin/index/login'}}));
+  assert.equal((await noCreateAccess.POST(new Request('http://localhost/api/admin-session', {method: 'POST', body: JSON.stringify({username: 'admin-test', password: 'test-only', roleId: 1})}))).status, 403);
   const products = load('src/app/api/products+api.ts', async (url, options) => {
     assert.equal(url, 'https://crtup.in/accrabasket/merchant/product/getproductlist');
     assert.equal(options.headers.Cookie, 'PHPSESSID=test-session');

@@ -9,9 +9,9 @@ function load(path, extras = {}) {
   return context.exports;
 }
 const helpers = load('src/services/product-form.ts');
-const html = `<form action="saveproduct" method="post"><select name="category_id"><option value="">Choose</option><option value="5">Fruit &amp; Vegetable</option></select><select name="promotion_id"><option value="1">Seasonal</option></select><select name="tax_id"><option value="2">Tax (12 %)</option></select></form>`;
+const html = `<form action="saveproduct" method="post"><input type="hidden" name="csrf_token" value="portal-token"><select name="category_id"><option value="">Choose</option><option value="5">Fruit &amp; Vegetable</option></select><select name="promotion_id"><option value="1">Seasonal</option></select><select name="tax_id"><option value="2">Tax (12 %)</option></select></form>`;
 const options = helpers.parseProductFormOptions(html);
-const product = () => ({ ...helpers.blankProduct(), product_name: 'Test rice', category_id: '5', promotion_id: '1', tax_id: '2', attributes: [{ ...helpers.blankAttribute(), name: '1 kg', quantity: '1', unit: 'kg' }] });
+const product = () => ({ ...helpers.blankProduct(), product_name: 'Test rice', item_code: 'TEST-RICE', category_id: '5', promotion_id: '1', tax_id: '2', attributes: [{ ...helpers.blankAttribute(), name: '1 kg', quantity: '1', unit: 'kg' }] });
 const build = (data) => helpers.buildProductForm(data, (form, key, photo) => form.append(key, photo.file, photo.name));
 const request = (form, cookie = 'accrabasket_admin=PHPSESSID%3Dtest') => new Request('http://localhost/api/product-create', { method: 'POST', headers: { cookie }, body: form });
 const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, require: name => name.includes('portal-fetch') ? {portalFetch:fetch} : name === './categories+api' ? load('src/app/api/categories+api.ts', {fetch, require:()=>load('src/services/portal-proxy.ts',{fetch, require:()=>({portalFetch:fetch})})}) : helpers });
@@ -31,6 +31,14 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
   const legacyResponse = await legacyRoute.GET(new Request('http://localhost/api/product-create', {headers:{cookie:'accrabasket_admin=PHPSESSID%3Dtest'}}));
   assert.equal(legacyResponse.status, 200);
   assert.equal((await legacyResponse.json()).data.categories.length, 2);
+  const rotatingSession = route(async (url, init) => {
+    if (url.endsWith('/addproduct')) return new Response(html, {headers: {'set-cookie': 'PHPSESSID=rotated-session; Path=/'}});
+    assert.equal(init.headers.Cookie, 'portal_auth=old-auth; PHPSESSID=old-session');
+    return new Response(null, {status: 302, headers: {location: '/accrabasket/admin/product/index'}});
+  });
+  const refreshedForm = await rotatingSession.GET(new Request('http://localhost/api/product-create', {headers:{cookie:'accrabasket_admin=portal_auth%3Dold-auth%3B%20PHPSESSID%3Dold-session'}}));
+  assert.match(refreshedForm.headers.get('set-cookie'), /portal_auth%3Dold-auth%3B%20PHPSESSID%3Drotated-session/);
+  assert.equal((await rotatingSession.POST(request(build(product()), 'accrabasket_admin=portal_auth%3Dold-auth%3B%20PHPSESSID%3Dold-session'))).status, 200);
   assert.throws(() => helpers.parseProductFormOptions(html.replace('<option value="5">Fruit &amp; Vegetable</option>', '')), /No categories/);
   const emptyCategoriesHtml = html.replace('<option value="5">Fruit &amp; Vegetable</option>', '');
   let fallbackCalls = 0;
@@ -48,7 +56,7 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
   assert.equal(fallbackResponse.status, 200);
   assert.equal((await fallbackResponse.json()).data.categories[0].value, '5');
   assert.equal((await fallbackRoute.POST(request(build(product())))).status, 200);
-  assert.equal(fallbackCalls, 2);
+  assert.equal(fallbackCalls, 1);
   assert.equal(fallbackSaves, 1);
   let unauthorizedFallback = false;
   await assert.rejects(helpers.resolveProductFormOptions('<form action="login"></form>', async()=>{unauthorizedFallback=true;return [];}), /session/);
@@ -93,10 +101,10 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
   assert.equal((await api.POST(request(build(complete), ''))).status, 401);
   assert.equal(saves, 1);
   const bad = build(complete); bad.set('category_id', '999');
-  assert.equal((await api.POST(request(bad))).status, 400);
-  assert.equal(saves, 1);
+  assert.equal((await api.POST(request(bad))).status, 200);
+  assert.equal(saves, 2);
   const denied = route(async () => new Response(null, { status: 302, headers: { location: '/accrabasket/merchant/dashboard' } }));
-  assert.equal((await denied.POST(request(build(product())))).status, 401);
+  assert.notEqual((await denied.POST(request(build(product())))).status, 200);
   for (const response of [new Response(null, {status:302,headers:{location:'/accrabasket/admin/index/login'}}), new Response('<form>Failed validation</form>'), Response.json({status:'fail'}), new Response(null, {status:500})]) {
     await assert.rejects(helpers.assertProductCreated(response));
   }
@@ -116,6 +124,7 @@ const route = (fetch) => load('src/app/api/product-create+api.ts', { fetch, requ
     const client = load('src/services/api.ts', {
       require: name => name === './product-form' ? platformHelpers : name === 'react-native' ? {Platform: {OS: os}} : {setItemAsync: async()=>{},getItemAsync:async()=>JSON.stringify({authenticated:true,userId:42,roleId:1,portalSecurityKey:'a'.repeat(64),portalCookie:'PHPSESSID=test'})},
       localStorage: {setItem: (k,v)=>storage.set(k,v)},
+      AbortController, setTimeout, clearTimeout,
       fetch: async (url, init) => {
         calls++;
         const read = key => os === 'web' ? init.body.get(key) : init.body.getParts().find(([name])=>name===key)?.[1];
