@@ -21,7 +21,7 @@ export async function POST(request: Request) {
 
     return Response.json({ status: 'success' }, {
       headers: {
-        'Set-Cookie': `accrabasket_admin=${encodeURIComponent(upstreamCookie)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800`,
+        'Set-Cookie': `accrabasket_admin=${encodeURIComponent(upstreamCookie)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
         'Cache-Control': 'no-store',
       },
     });

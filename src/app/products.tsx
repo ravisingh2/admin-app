@@ -189,6 +189,15 @@ export default function ProductsScreen() {
       return matchesCategory && Boolean(matchesName);
     });
   }, [entries, query, selectedCategory]);
+  const sessionExpired = /session.*expired|session required/i.test(error);
+  const retryProducts = () => {
+    if (sessionExpired) {
+      router.push('/reconnect-products');
+      return;
+    }
+    void loadPage(1, false);
+  };
+
   const loadNextPage = () => {
     if (!scrollReadyRef.current || !hasMore || loading || loadingMore || refreshing) return;
     scrollReadyRef.current = false;
@@ -220,7 +229,7 @@ export default function ProductsScreen() {
         <Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>
         <View style={styles.heading}><Text style={styles.title}>{isMerchant ? 'Manage Products' : 'Product'}</Text>{!isMerchant && <Text style={styles.breadcrumb}>Dashboard  /  Product</Text>}</View>
         {isMerchant && <Pressable onPress={() => router.navigate('/orders')} style={styles.ordersButton}><Text style={styles.ordersButtonText}>Manage Orders</Text></Pressable>}
-        {!isMerchant && <Pressable style={styles.addButton}><Text style={styles.addButtonText}>＋ Add Product</Text></Pressable>}
+        {getAuthenticatedRoleId() === 1 && <Pressable accessibilityRole="button" onPress={() => router.push('/add-product')} style={styles.addButton}><Text style={styles.addButtonText}>＋ Add Product</Text></Pressable>}
       </View>
 
       <View style={[styles.panel, isMerchant && styles.merchantPanel]}>
@@ -252,7 +261,7 @@ export default function ProductsScreen() {
         </Modal>
 
         {loading ? <View style={styles.center}><ActivityIndicator size="large" color="#3C8DBC" /><Text style={styles.stateText}>Loading products…</Text></View>
-          : error && products.length === 0 ? <View style={styles.center}><Text style={styles.errorTitle}>Couldn’t load products</Text><Text style={styles.stateText}>{error}</Text><Pressable onPress={() => loadPage(1, false)} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Pressable></View>
+          : error && products.length === 0 ? <View style={styles.center}><Text style={styles.errorTitle}>Couldn’t load products</Text><Text style={styles.stateText}>{error}</Text><Pressable onPress={retryProducts} style={styles.retry}><Text style={styles.retryText}>{sessionExpired ? 'Sign in again' : 'Try again'}</Text></Pressable></View>
           : <>
             {!isMerchant && false && <View style={styles.tableHeader}>
               {!isMerchant && <Text style={[styles.headerCell, styles.serial]}>#</Text>}<Text style={[styles.headerCell, styles.productColumn]}>Product / Attribute</Text><Text style={[styles.headerCell, styles.category]}>Category</Text>{isMerchant ? <><Text style={[styles.headerCell, styles.price]}>Price</Text><Text style={[styles.headerCell, styles.stock]}>Stock</Text></> : <><Text style={[styles.headerCell, styles.quantity]}>Qty</Text><Text style={[styles.headerCell, styles.unit]}>Unit</Text><Text style={[styles.headerCell, styles.statusColumn]}>Status</Text></>}<Text style={[styles.headerCell, isMerchant ? styles.merchantAction : styles.actionColumn]}>Action</Text>

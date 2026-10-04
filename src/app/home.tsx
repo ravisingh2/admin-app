@@ -1,8 +1,9 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { useSyncExternalStore } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { setAuthenticated } from '@/services/api';
+import { getAuthenticatedRoleId, getAuthenticatedUserName, setAuthenticated, subscribeAuthentication } from '@/services/api';
 
 const actions = [
   { icon: '▦', title: 'Browse products', caption: 'Explore the latest items', color: '#E4F3E8', route: '/products' as const },
@@ -12,9 +13,12 @@ const actions = [
 ];
 
 export default function HomeScreen() {
-  const { name } = useLocalSearchParams<{ name?: string }>();
-  const displayName = typeof name === 'string' && name ? name : 'there';
-  const signOut = () => { setAuthenticated(false); router.replace('/'); };
+  const name = useSyncExternalStore(subscribeAuthentication, getAuthenticatedUserName, () => '');
+  const displayName = name || 'there';
+  const signOut = async () => {
+    try { await setAuthenticated(false); router.replace('/'); }
+    catch { Alert.alert('Could not log out', 'Please try again.'); }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -24,8 +28,8 @@ export default function HomeScreen() {
             <Text style={styles.eyebrow}>CRTUP</Text>
             <Text style={styles.greeting}>Hello, {displayName}</Text>
           </View>
-          <Pressable accessibilityLabel="Sign out" onPress={signOut} style={styles.avatar}>
-            <Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text>
+          <Pressable accessibilityLabel="Logout" onPress={signOut} style={styles.avatar}>
+            <Text style={styles.avatarText}>Logout</Text>
           </Pressable>
         </View>
 
@@ -34,6 +38,7 @@ export default function HomeScreen() {
           <Text style={styles.sectionMeta}>Your shortcuts</Text>
         </View>
         <View style={styles.grid}>
+          {getAuthenticatedRoleId() === 1 && <Pressable onPress={() => router.push('/add-product')} style={({ pressed }) => [styles.actionCard, pressed && styles.pressed]}><View style={[styles.actionIcon, { backgroundColor: '#E4F3E8' }]}><Text style={styles.actionIconText}>＋</Text></View><Text style={styles.actionTitle}>Add product</Text><Text style={styles.actionCaption}>Grow your product catalogue</Text></Pressable>}
           {actions.map((action) => (
             <Pressable key={action.title} onPress={() => { if (action.route) router.navigate(action.route); }} style={({ pressed }) => [styles.actionCard, pressed && styles.pressed]}>
               <View style={[styles.actionIcon, { backgroundColor: action.color }]}><Text style={styles.actionIconText}>{action.icon}</Text></View>
@@ -60,7 +65,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   eyebrow: { fontSize: 11, fontWeight: '900', letterSpacing: 1.8, color: '#4F8069' },
   greeting: { fontSize: 25, lineHeight: 33, fontWeight: '800', color: '#173D2D', marginTop: 2 },
-  avatar: { width: 46, height: 46, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#176B45' },
+  avatar: { width: 76, height: 46, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#176B45' },
   avatarText: { color: '#FFFFFF', fontWeight: '800', fontSize: 18 },
   sectionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 15 },
   sectionTitle: { color: '#173D2D', fontSize: 19, fontWeight: '800' },
