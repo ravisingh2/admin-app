@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { getAuthenticatedRoleId, getMerchantOrderPage, MerchantOrder } from '@/services/api';
@@ -28,6 +28,24 @@ function statusTone(status: string) {
   return { backgroundColor: '#E9F6EE', color: '#176B45' };
 }
 
+function playOrderNotification(context: AudioContext) {
+  const now = context.currentTime;
+  for (const [frequency, delay] of [[880, 0], [1175, 0.14]] as const) {
+    const oscillator = context.createOscillator();
+    const volume = context.createGain();
+    const start = now + delay;
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(frequency, start);
+    volume.gain.setValueAtTime(0.001, start);
+    volume.gain.exponentialRampToValueAtTime(0.16, start + 0.02);
+    volume.gain.exponentialRampToValueAtTime(0.001, start + 0.32);
+    oscillator.connect(volume);
+    volume.connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.33);
+  }
+}
+
 export default function OrdersScreen() {
   const [orders, setOrders] = useState<MerchantOrder[]>([]);
   const [status, setStatus] = useState('order_placed');
@@ -38,12 +56,52 @@ export default function OrdersScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [liveStatus, setLiveStatus] = useState('Connecting to live order alerts…');
+  const [soundReady, setSoundReady] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>('default');
   const [assignmentOrder, setAssignmentOrder] = useState<MerchantOrder | null>(null);
   const [notice, setNotice] = useState('');
   const requestId = useRef(0);
   const busy = useRef(false);
   const scrollReady = useRef(false);
   const lastScrollY = useRef(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const pendingSoundRef = useRef(false);
+
+  const resumeOrderAudio = useCallback(() => {
+    const audioContext = audioContextRef.current;
+    if (!audioContext) return;
+    void audioContext.resume().then(() => {
+      const ready = audioContext.state === 'running';
+      setSoundReady(ready);
+      if (ready && pendingSoundRef.current) {
+        pendingSoundRef.current = false;
+        setLiveStatus('New order received; playing notification sound');
+        playOrderNotification(audioContext);
+      }
+    }).catch(() => setSoundReady(false));
+  }, []);
+
+  const enableSoundAlerts = useCallback(() => {
+    resumeOrderAudio();
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported');
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      setNotificationPermission('denied');
+      setLiveStatus('Notifications are blocked in browser settings');
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      setNotificationPermission('granted');
+      return;
+    }
+    void Notification.requestPermission().then((permission) => {
+      setNotificationPermission(permission);
+      setLiveStatus(permission === 'granted' ? 'Sound alerts enabled' : 'Allow notifications in browser settings to hear order alerts');
+    }).catch(() => setNotificationPermission('unsupported'));
+  }, [resumeOrderAudio]);
 
   const load = useCallback(async (nextPage: number, append = false, refresh = false) => {
     if (append && busy.current) return;
@@ -65,16 +123,80 @@ export default function OrdersScreen() {
     finally { if (id === requestId.current) { busy.current = false; setLoading(false); setLoadingMore(false); setRefreshing(false); } }
   }, [search, status]);
 
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.AudioContext) return;
+    const audioContext = new window.AudioContext();
+    audioContextRef.current = audioContext;
+    setNotificationPermission(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+    const updateSoundReady = () => setSoundReady(audioContext.state === 'running');
+    audioContext.addEventListener('statechange', updateSoundReady);
+    window.addEventListener('pointerdown', resumeOrderAudio);
+    window.addEventListener('keydown', resumeOrderAudio);
+    resumeOrderAudio();
+    return () => {
+      window.removeEventListener('pointerdown', resumeOrderAudio);
+      window.removeEventListener('keydown', resumeOrderAudio);
+      audioContext.removeEventListener('statechange', updateSoundReady);
+      if (audioContext.state !== 'closed') void audioContext.close();
+      if (audioContextRef.current === audioContext) audioContextRef.current = null;
+    };
+  }, [resumeOrderAudio]));
+
   useFocusEffect(useCallback(() => {
     scrollReady.current = false;
     lastScrollY.current = 0;
-    const timer = setTimeout(() => void load(1), 350);
-    return () => { clearTimeout(timer); requestId.current++; busy.current = false; };
-  }, [load]));
+    const timer = setTimeout(() => void loadRef.current(1), 350);
+    const events = Platform.OS === 'web' && typeof EventSource !== 'undefined' ? new EventSource('/api/order-events') : null;
+    const notifiedOrderIds = new Set<string>();
+    events?.addEventListener('connection', (event) => {
+      try {
+        const { state } = JSON.parse((event as MessageEvent<string>).data);
+        setLiveStatus(state === 'connected' ? 'Live order alerts connected' : state === 'connecting' ? 'Connecting to live order alerts…' : 'Live order alerts disconnected');
+      } catch { setLiveStatus('Live order alert status unavailable'); }
+    });
+    events?.addEventListener('error', () => setLiveStatus('Reconnecting to live order alerts…'));
+    events?.addEventListener('order.created', (event) => {
+      let orderId = '';
+      try { orderId = JSON.parse((event as MessageEvent<string>).data).orderId; } catch { return; }
+      if (!orderId || notifiedOrderIds.has(orderId)) return;
+      notifiedOrderIds.add(orderId);
+      const audioContext = audioContextRef.current;
+      if (audioContext?.state === 'running') {
+        pendingSoundRef.current = false;
+        setLiveStatus('New order received; playing notification sound');
+        playOrderNotification(audioContext);
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        pendingSoundRef.current = false;
+        setLiveStatus('New order received; sending system sound notification');
+        try { new Notification('New order received', { body: `Order ${orderId}`, tag: `order-${orderId}` }); }
+        catch {
+          setNotificationPermission('unsupported');
+          pendingSoundRef.current = true;
+          setLiveStatus('New order received; tap Allow sound alerts to play it');
+          resumeOrderAudio();
+        }
+      } else {
+        pendingSoundRef.current = true;
+        setLiveStatus('New order received; tap Allow sound alerts to play it');
+        resumeOrderAudio();
+      }
+      void loadRef.current(1, false, true);
+    });
+    return () => {
+      clearTimeout(timer);
+      events?.close();
+      requestId.current++;
+      busy.current = false;
+    };
+  }, [resumeOrderAudio]));
 
   return <SafeAreaView style={styles.safe}>
     <View style={styles.header}><Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable><Text style={styles.title}>Orders</Text></View>
     <View style={styles.content}>
+      {Platform.OS === 'web' && <View style={styles.liveStatusRow}><Text accessibilityRole="status" style={styles.muted}>{liveStatus}</Text>{notificationPermission !== 'granted' && <Pressable accessibilityRole="button" onPress={enableSoundAlerts} style={styles.enableSound}><Text style={styles.enableSoundText}>Allow sound alerts</Text></Pressable>}</View>}
       {!!notice && <Text accessibilityRole="alert" style={styles.muted}>{notice}</Text>}
       {!!error && !!orders.length && <View><Text style={styles.error}>{error}</Text><Pressable onPress={() => void load(1, false, true)}><Text style={styles.orderId}>Retry</Text></Pressable></View>}
       <TextInput value={search} onChangeText={setSearch} placeholder="Search by order ID" placeholderTextColor="#999" autoCapitalize="none" style={styles.search} />
@@ -99,5 +221,6 @@ export default function OrdersScreen() {
 }
 
 const styles = StyleSheet.create({
+  liveStatusRow: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, enableSound: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 7, backgroundColor: '#176B45' }, enableSoundText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
   safe: { flex: 1, backgroundColor: '#F3F7F4' }, header: { height: 62, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, backgroundColor: '#176B45', borderBottomWidth: 1, borderBottomColor: '#145D3D' }, back: { width: 42 }, backText: { fontSize: 34, color: '#FFF' }, title: { fontSize: 22, fontWeight: '800', color: '#FFF' }, content: { flex: 1, width: '100%', maxWidth: 780, alignSelf: 'center', padding: 10 }, search: { height: 44, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DFE8E2', paddingHorizontal: 14, borderRadius: 12, shadowColor: '#173D2D', shadowOpacity: 0.06, shadowRadius: 5, elevation: 1 }, tabsWrap: { backgroundColor: '#FFF', borderRadius: 12, borderWidth: 1, borderColor: '#E1E9E4', marginVertical: 9, overflow: 'hidden' }, statuses: { paddingHorizontal: 3 }, statusTab: { minHeight: 43, justifyContent: 'center', paddingHorizontal: 15, borderBottomWidth: 3, borderBottomColor: 'transparent' }, statusTabActive: { backgroundColor: '#EDF7F0', borderBottomColor: '#176B45' }, statusTabText: { color: '#667', fontSize: 11, fontWeight: '700' }, statusTabTextActive: { color: '#176B45', fontWeight: '900' }, card: { backgroundColor: '#FFF', borderLeftWidth: 4, borderLeftColor: '#3E9A6D', borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#E3EBE6', shadowColor: '#173D2D', shadowOpacity: 0.08, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 }, cardTop: { flexDirection: 'row', alignItems: 'center' }, orderId: { color: '#176B45', fontSize: 14, fontWeight: '900' }, badge: { backgroundColor: '#E8F4FA', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 12 }, badgeText: { color: '#247BA5', fontSize: 9, fontWeight: '900' }, customer: { color: '#173D2D', fontSize: 15, fontWeight: '800', marginTop: 10 }, address: { color: '#718078', fontSize: 11, lineHeight: 16, marginTop: 3 }, metrics: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 12, marginTop: 11, borderTopWidth: 1, borderTopColor: '#E8EEE9' }, metricLabel: { color: '#94A29B', fontSize: 9, textTransform: 'uppercase', fontWeight: '700' }, amount: { color: '#13824F', fontSize: 15, fontWeight: '900', marginTop: 3 }, metric: { color: '#3E554A', fontSize: 12, fontWeight: '800', marginTop: 3 }, slot: { color: '#8B9A92', fontSize: 9, marginTop: 1 }, created: { color: '#9EAAA3', fontSize: 9, textAlign: 'right', marginTop: 10 }, center: { minHeight: 260, alignItems: 'center', justifyContent: 'center' }, muted: { color: '#718078', marginTop: 9 }, error: { color: '#A94442', textAlign: 'center' }, retry: { marginTop: 12, backgroundColor: '#176B45', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8 }, retryText: { color: '#FFF', fontWeight: '700' }, footer: { padding: 18 },
 });
